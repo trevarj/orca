@@ -5,20 +5,24 @@ import { useAppStore } from '@/store'
 import { getIndexedRepoMap } from '@/store/worktree-repo-index'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { resolveWorktreeDisplayName } from '@/lib/worktree-default-display-name'
-import { getKnownExecutionHostIdForWorktree } from '@/lib/worktree-runtime-owner'
+import { getResolvedExecutionHostIdForWorktree } from '@/lib/resolved-worktree-execution-host'
 import { resolveIndexedWorktreeOwner } from '@/lib/worktree-runtime-owner-index'
 import { withRepoHostOwnership } from '@/store/slices/worktrees/listing/worktree-host-ownership'
 import { isFolderRepo } from '../../../shared/repo-kind'
 import type { ExecutionHostId } from '../../../shared/execution-host'
 import { worktreeIdsEqual } from '../../../shared/worktree/id'
 import type { Worktree } from '../../../shared/worktree/types'
+import { selectWorktreesByRepo } from '@/store/workspace-record-selectors'
 
 /** Announces a create that finished after the user left its creation surface, instead of pulling them to it. */
 export function showWorktreeCreationReadyToast(
   worktree: Pick<Worktree, 'id' | 'repoId' | 'displayName' | 'branch' | 'path' | 'hostId'>,
   creationHostId?: ExecutionHostId
 ): void {
-  const owner = resolveIndexedWorktreeOwner(useAppStore.getState().worktreesByRepo, worktree.id)
+  const owner = resolveIndexedWorktreeOwner(
+    selectWorktreesByRepo(useAppStore.getState()),
+    worktree.id
+  )
   const ownerHostId = creationHostId ?? (owner.kind === 'resolved' ? owner.owner.hostId : undefined)
   // Paired create responses name the server's host; use the renderer's ownership projection.
   const executionHostId =
@@ -34,7 +38,9 @@ export function showWorktreeCreationReadyToast(
     worktreeIdsEqual(state.activeWorktreeId, worktree.id) &&
     executionHostId !== null &&
     (executionHostId === undefined ||
-      getKnownExecutionHostIdForWorktree(state, state.activeWorktreeId) === executionHostId)
+      // Owner rows only: the Active Server setting never says which host's workspace is open.
+      (state.activeWorkspaceExecutionHostId ??
+        getResolvedExecutionHostIdForWorktree(state, state.activeWorktreeId)) === executionHostId)
   if (isViewingWorktree(useAppStore.getState())) {
     return
   }

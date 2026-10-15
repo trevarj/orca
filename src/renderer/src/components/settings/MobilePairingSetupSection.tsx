@@ -53,17 +53,12 @@ export function MobilePairingSetupSection({
   const usingRelay = connectionMode === 'automatic'
   const usingIroh = connectionMode === 'iroh'
   const [addressDisclosureOpen, setAddressDisclosureOpen] = useState(false)
-  // A search hit or a custom address pins the picker open: render it outright
-  // rather than behind a trigger that could not collapse it anyway.
+  // Render search/custom-address pickers outright; a collapse trigger cannot close pinned-open state.
   const addressDisclosurePinned = addressDisclosureForcedOpen || selectedAddressIsCustom
-  // Relay offers still carry a LAN endpoint for the direct fast path, but main
-  // substitutes its own default when the renderer has not resolved one yet.
-  // LAN has no such fallback, so it needs an explicit reachable host.
-  // Iroh dials by public key, so an unpicked LAN address must not block the QR either.
+  // Only LAN requires an explicit address; Relay has a default and Iroh dials by public key.
   const generateDisabled =
     loading || !canGenerate || (!usingRelay && !usingIroh && !selectedAddress)
-  // "Also use…" frames this as additive under Relay, not a second connection mode.
-  // The phone races both paths and direct wins ties when nearby.
+  // Present Relay’s direct path as additive; the phone races both and favors direct on ties.
   const relayAddressLabel = translate(
     'auto.components.settings.MobilePairingSetupSection.step2RelayDisclosure',
     'Also use a faster local path'
@@ -151,8 +146,7 @@ export function MobilePairingSetupSection({
           </div>
         </div>
       ) : usingRelay ? (
-        // Why: Relay makes the address optional, not irrelevant — demote it to a
-        // disclosure so the direct fast path stays reachable without clutter.
+        // Keep Relay’s optional direct path available in a disclosure without dominating setup.
         <Collapsible open={addressDisclosureOpen} onOpenChange={setAddressDisclosureOpen}>
           <CollapsibleTrigger asChild>
             <Button

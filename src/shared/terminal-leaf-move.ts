@@ -12,7 +12,12 @@ export type TerminalLeafMoveRequest = {
 
 export type TerminalLeafMoveResult =
   /** Main moved the leaf and every pane-keyed record into the target tab in one durable write. */
-  | { status: 'moved'; ptyId: string | null }
+  | {
+      status: 'moved'
+      ptyId: string | null
+      /** The new tab's id when main named it (layout-owner builds); else the request's. */
+      tabId?: string
+    }
   /** Main's session never held the leaf, so there is nothing to move there. */
   | { status: 'not_held' }
   | {
@@ -20,7 +25,6 @@ export type TerminalLeafMoveResult =
       reason: 'invalid_request' | 'target_tab_exists' | 'pty_mismatch' | 'leaf_in_other_tab'
     }
 
-/** The moved pane's key before and after; only valid requests reach here. */
 export function terminalLeafMovePaneKeys(request: TerminalLeafMoveRequest): {
   from: PaneKey
   to: PaneKey
@@ -31,7 +35,6 @@ export function terminalLeafMovePaneKeys(request: TerminalLeafMoveRequest): {
   }
 }
 
-/** The one validation of a move request: shape, distinct tabs, and ids a pane key can carry. */
 export function isTerminalLeafMoveRequest(value: unknown): value is TerminalLeafMoveRequest {
   if (!value || typeof value !== 'object') {
     return false

@@ -25,13 +25,15 @@ const { toasts, store } = await vi.hoisted(async () => {
     activePendingCreationId: string | null
     activeWorkspaceExecutionHostId: ExecutionHostId | null
     worktreesByRepo: Record<string, Pick<Worktree, 'id' | 'repoId' | 'hostId'>[]>
+    settings: { activeRuntimeEnvironmentId: string | null }
   }>(() => ({
     repos: [],
     activeView: 'terminal',
     activeWorktreeId: null,
     activePendingCreationId: null,
     activeWorkspaceExecutionHostId: null,
-    worktreesByRepo: {}
+    worktreesByRepo: {},
+    settings: { activeRuntimeEnvironmentId: null }
   }))
   return { toasts, store }
 })
@@ -94,7 +96,8 @@ beforeEach(() => {
     activeWorktreeId: null,
     activePendingCreationId: null,
     activeWorkspaceExecutionHostId: null,
-    worktreesByRepo: {}
+    worktreesByRepo: {},
+    settings: { activeRuntimeEnvironmentId: null }
   })
 })
 
@@ -219,6 +222,18 @@ describe('showWorktreeCreationReadyToast', () => {
     const local = { ...worktree, hostId: 'local' as const }
     store.setState({ worktreesByRepo: { [worktree.repoId]: [local] } })
     showWorktreeCreationReadyToast(local)
+    store.setState({ activeWorktreeId: worktree.id })
+    await Promise.resolve()
+    expect(toast.dismiss).toHaveBeenCalledExactlyOnceWith(toasts[0]?.id)
+  })
+
+  it('routes an unqualified selection by the owner row, not the Active Server setting', async () => {
+    store.setState({
+      repos: [{ id: 'repo-1', kind: 'git' }],
+      worktreesByRepo: { [worktree.repoId]: [{ id: worktree.id, repoId: worktree.repoId }] },
+      settings: { activeRuntimeEnvironmentId: 'remote-a' }
+    })
+    showWorktreeCreationReadyToast(worktree, 'local')
     store.setState({ activeWorktreeId: worktree.id })
     await Promise.resolve()
     expect(toast.dismiss).toHaveBeenCalledExactlyOnceWith(toasts[0]?.id)

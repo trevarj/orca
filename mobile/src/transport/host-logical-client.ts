@@ -38,8 +38,7 @@ export function openHostLogicalClient(host: HostProfile, onLog: ConnectionLogSin
     setIrohHostStatus(host.id, 'failed', 'native_module_unavailable', Date.now())
   }
 
-  // Why: the stable facade owns app-visible RPC/subscription state while the
-  // direct socket remains a replaceable first physical generation.
+  // Keep app-visible RPC/subscription identity stable while replacing physical sockets.
   const logical = createStableLogicalRpcClient(
     connect(host.endpoint, host.deviceToken, host.publicKeyB64, { onLog }),
     directPathForEndpoint(host.endpoint)
@@ -70,8 +69,7 @@ function finalizeLogicalClient(
   }
   const notifyLogicalForeground = logical.notifyForeground
   logical.notifyForeground = (reason = 'focus') => {
-    // Why: a nudge while already foreground must not re-enter setForeground —
-    // that path suspended healthy relays; the supervisor probes or replaces instead.
+    // Foreground nudges probe/replace; re-entering setForeground would suspend healthy relays.
     endpointLifecycle.nudge(reason)
     notifyLogicalForeground(reason)
   }

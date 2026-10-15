@@ -1,25 +1,67 @@
+import {
+  captureSavedResumeCleanup,
+  chooseSavedResumeFreshLaunch,
+  type ResumeSpawnAdmission,
+  resumeSpawnRefusal
+} from '../host-env/saved-resume-admission'
 import { ensureWslHookRelayForReattach } from '../../../agent-hooks/wsl-hook-relay-reattach'
 import { noteWslDistrosRunning } from '../../../wsl-background-distro-gate'
-import { classifyError } from '../../../telemetry/classify-error'
-import { track } from '../../../telemetry/client'
-import { getCohortAtEmit } from '../../../telemetry/cohort-classifier'
-import { agentKindSchema } from '../../../../shared/telemetry-events'
-import { normalizeNodePtySpawnError } from '../provider/liveness'
-import { resolveStablePaneOwner, spawnForStablePane } from '../pane/stable-owner'
-import { excludeReplacedPaneOwner } from '../pane/pane-owner-replacement'
+import { resolveStablePaneOwner } from '../pane/stable-owner'
+import {
+  assertPaneStillExists,
+  excludeAbsentOwnerReplay,
+  PaneOwnerContentionError
+} from '../pane/pane-spawn-operation'
+import { excludeReplacedPaneOwner } from '../pane/replaced-pane-owner'
 import { assertSpawnReplyWasLive } from '../pane/agent-session-owners'
-import { ptySizes } from '../delivery/visibility-state'
-import { clearProviderPtyState } from '../provider/state-cleanup'
+import { failPtySpawnExecute } from '../spawn-execute-failure'
+import { attachOnlyViewOf, attachViewWithoutOwner } from '../pane/attach-only-view'
 import type { PtyIpcSpawnState } from './spawn-state'
 
 export async function executePtyIpcSpawn(ctx: PtyIpcSpawnState): Promise<void> {
   const args = ctx.args
+  const captured: ResumeSpawnAdmission | null =
+    args.launchAgent && args.resumeProviderSession
+      ? {
+          verdict: 'admitted',
+          refused: { agent: args.launchAgent, providerSession: args.resumeProviderSession }
+        }
+      : null
+  if (args.resumeOrigin === 'saved') {
+    await captureSavedResumeCleanup(
+      ctx.deps.runtime,
+      ctx.deps.store,
+      ctx.stablePaneKey,
+      captured,
+      args.worktreeId
+    )
+  }
+  const chooseFresh = async (): Promise<void> => {
+    ctx.spawnOptions.env = { ...ctx.spawnOptions.env }
+    args.launchConfig = ctx.effectiveLaunchConfig
+    ctx.resumeAdmission = await chooseSavedResumeFreshLaunch(
+      ctx.deps.runtime,
+      args,
+      ctx.expectedWslDistro,
+      ctx.spawnOptions
+    )
+    if (captured && ctx.resumeAdmission) {
+      ctx.resumeAdmission.refused = captured.refused
+      ctx.resumeAdmission.sourceRecord = captured.sourceRecord
+    }
+    if (resumeSpawnRefusal(ctx.resumeAdmission)) {
+      ctx.launchCommand = undefined
+      ctx.env = ctx.spawnOptions.env
+      ctx.baseEnv = ctx.spawnOptions.env
+      ctx.spawnEnv = ctx.spawnOptions.env
+    }
+  }
   try {
     if (ctx.preAllocatedHandle) {
       ctx.deps.trustedTerminalHandleEnv.add(ctx.preAllocatedHandle)
     }
     ctx.spawnTiming.mark('options')
-    // Why exclude: the restart's own stop leaves its binding for the bind to swap, not to reattach.
+    // Restart must replace the stopped owner instead of reattaching its retained binding.
     const resolveOwner = () =>
       excludeReplacedPaneOwner(
         resolveStablePaneOwner(
@@ -31,11 +73,25 @@ export async function executePtyIpcSpawn(ctx: PtyIpcSpawnState): Promise<void> {
         ),
         ctx.replacedPaneOwner
       )
-    const stablePaneOwnerCandidate = resolveOwner()
-    const expectedPtyId =
-      stablePaneOwnerCandidate?.ptyId ?? ctx.effectiveSessionAppId ?? ctx.effectiveSessionId
+    const stablePaneOwnerCandidate = excludeAbsentOwnerReplay(
+      resolveOwner(),
+      ctx.paneSpawnOperation?.absentOwner
+    )
+    if (stablePaneOwnerCandidate) {
+      throw new PaneOwnerContentionError()
+    }
+    if (ctx.paneSpawnOperation?.mustExist && args.worktreeId && args.tabId && args.leafId) {
+      assertPaneStillExists(
+        ctx.deps.store,
+        args.worktreeId,
+        args.tabId,
+        args.leafId,
+        args.connectionId
+      )
+    }
+    const expectedPtyId = ctx.effectiveSessionAppId ?? ctx.effectiveSessionId
     if (expectedPtyId) {
-      ctx.deps.runtime?.beginPtyRegistration?.(expectedPtyId)
+      ctx.pendingRegistrationClaim = ctx.deps.runtime?.beginPtyRegistration?.(expectedPtyId)
       ctx.pendingRegistrationPtyId = expectedPtyId
     }
     if (ctx.isDaemonHostSpawn && expectedPtyId) {
@@ -48,44 +104,54 @@ export async function executePtyIpcSpawn(ctx: PtyIpcSpawnState): Promise<void> {
     const sequenceBeforeProviderSpawn = expectedPtyId
       ? (ctx.deps.runtime?.getPtyOutputSequence?.(expectedPtyId) ?? 0)
       : 0
-    const stablePaneSpawn = ctx.preAdoptedStablePane
-      ? ctx.preAdoptedStablePane
-      : await spawnForStablePane({
-          runtime: ctx.deps.runtime,
-          store: ctx.deps.store,
-          provider: ctx.provider,
-          spawnOptions: ctx.spawnOptions,
-          owner: stablePaneOwnerCandidate,
-          worktreeId: args.worktreeId,
-          connectionId: args.connectionId,
-          resolveOwner
-        })
-    ctx.result = stablePaneSpawn.result
-    ctx.stablePaneOwner = stablePaneSpawn.owner
-    if (
-      ctx.stablePaneOwner &&
-      ctx.isMintedSessionId &&
-      ctx.effectiveSessionAppId &&
-      ctx.effectiveSessionAppId !== ctx.result.id
-    ) {
-      clearProviderPtyState(ctx.effectiveSessionAppId)
+    if (!ctx.preAdoptedStablePane && ctx.paneAgentLaunch) {
+      ctx.paneAgentLaunch.dispatched = true
     }
+    if (attachOnlyViewOf(args)) {
+      ctx.result = await attachViewWithoutOwner(ctx.provider, ctx.spawnOptions)
+    } else {
+      await chooseFresh()
+      ctx.result = await ctx.provider.spawn(ctx.spawnOptions)
+    }
+    if (ctx.result.isReattach) {
+      ctx.resumeAdmission = null
+      Object.assign(ctx.result, ctx.deps.runtime?.getTerminalLaunchResult?.(ctx.result.id))
+    }
+    if (resumeSpawnRefusal(ctx.resumeAdmission)) {
+      ctx.effectiveLaunchConfig = undefined
+    }
+    ctx.stablePaneOwner = null
     ctx.rejectedRegistrationCandidate = ctx.result
     if (ctx.pendingRegistrationPtyId !== ctx.result.id) {
       if (ctx.pendingRegistrationPtyId) {
-        ctx.deps.runtime?.cancelPendingPtyRegistration?.(ctx.pendingRegistrationPtyId)
+        ctx.deps.runtime?.cancelPendingPtyRegistration?.(
+          ctx.pendingRegistrationPtyId,
+          undefined,
+          ctx.pendingRegistrationClaim
+        )
       }
-      ctx.deps.runtime?.beginPtyRegistration?.(ctx.result.id, ctx.result.incarnationId)
+      ctx.pendingRegistrationClaim = ctx.deps.runtime?.beginPtyRegistration?.(
+        ctx.result.id,
+        ctx.result.incarnationId
+      )
       ctx.pendingRegistrationPtyId = ctx.result.id
     }
     assertSpawnReplyWasLive(ctx.result)
+    if (
+      ctx.pendingRegistrationClaim &&
+      !ctx.deps.runtime?.narrowPtyRegistration(
+        ctx.result.id,
+        ctx.pendingRegistrationClaim,
+        ctx.result.incarnationId
+      )
+    ) {
+      throw new PaneOwnerContentionError()
+    }
     ctx.deps.runtime?.assertPtyRegistrationAllowed?.(ctx.result.id, ctx.result.incarnationId)
     if (ctx.result.providerSequence) {
       const runtimeSequenceBeforeReconcile =
         ctx.deps.runtime?.getPtyOutputSequence?.(ctx.result.id) ?? 0
-      // Why kept: this is the reattach boundary in the RENDERER's sequence
-      // domain, and the daemon snapshot's kitty flags mean nothing without
-      // the boundary they were proven at.
+      // Preserve the renderer-domain boundary needed to reconcile daemon snapshot kitty flags.
       ctx.reconciledSnapshotSeq =
         ctx.deps.runtime?.synchronizePtyOutputSequenceFromProvider?.(
           ctx.result.id,
@@ -106,69 +172,11 @@ export async function executePtyIpcSpawn(ctx: PtyIpcSpawnState): Promise<void> {
     ctx.deps.runtime?.preparePtyExecutionContext?.(ctx.result.id, spawnedWslDistro)
     ctx.spawnTiming.mark('provider_spawn')
   } catch (err) {
-    if (
-      (ctx.isMintedSessionId || ctx.preparedProvisionalExecutionContext) &&
-      ctx.effectiveSessionAppId
-    ) {
-      ctx.deps.runtime?.preparePtyExecutionContext?.(ctx.effectiveSessionAppId, null, {
-        resetIncarnation: true
-      })
-    }
-    // Why: a stale hidden mark on this session id would gate a later visible attach that reuses it.
-    if (ctx.preSpawnHiddenMarkId !== null) {
-      ctx.deps.transitionSpawnHiddenRendererPtyDeliveryState(ctx.preSpawnHiddenMarkId, false)
-    }
-    const rawMessage = err instanceof Error ? err.message : String(err)
-    if (rawMessage === 'agent_session_exited_during_start' && ctx.rejectedRegistrationCandidate) {
-      ctx.deps.runtime?.releaseRejectedPtyRegistrationFence?.(
-        ctx.rejectedRegistrationCandidate.id,
-        ctx.rejectedRegistrationCandidate.incarnationId
-      )
-    }
-    if (ctx.pendingRegistrationPtyId) {
-      ctx.deps.runtime?.cancelPendingPtyRegistration?.(
-        ctx.pendingRegistrationPtyId,
-        ctx.rejectedRegistrationCandidate?.incarnationId
-      )
-      ctx.pendingRegistrationPtyId = null
-    }
-    const spawnError = normalizeNodePtySpawnError(err)
-    const exitedBeforeSpawnReply =
-      ctx.rejectedRegistrationCandidate?.exitedBeforeSpawnReply === true
-    if (ctx.effectiveSessionAppId !== undefined) {
-      if (
-        ctx.hadSessionSizeBeforeAttach &&
-        ctx.sessionSizeBeforeAttach &&
-        !exitedBeforeSpawnReply
-      ) {
-        ptySizes.set(ctx.effectiveSessionAppId, ctx.sessionSizeBeforeAttach)
-      } else {
-        ptySizes.delete(ctx.effectiveSessionAppId)
-      }
-    }
-    // Why: provider state buildPtyHostEnv materialized for this minted id leaks if spawn failed.
-    if (ctx.isMintedSessionId && ctx.effectiveSessionId !== undefined) {
-      clearProviderPtyState(ctx.effectiveSessionId)
-    }
-    // Why: telemetry-plan.md§agent_error — attribute the error to the renderer-threaded agent_kind, else sniff the command for `claude`; raw messages are dropped at the validator boundary.
-    const rendererAgentKindParse =
-      args.telemetry?.agent_kind !== undefined
-        ? agentKindSchema.safeParse(args.telemetry.agent_kind)
-        : null
-    const errorAgentKind = rendererAgentKindParse?.success
-      ? rendererAgentKindParse.data
-      : ctx.isClaudeLaunch
-        ? ('claude-code' as const)
-        : null
-    if (errorAgentKind) {
-      const classified = classifyError(spawnError)
-      track('agent_error', {
-        agent_kind: errorAgentKind,
-        error_class: classified.error_class,
-        ...getCohortAtEmit()
-      })
-    }
-    throw spawnError
+    throw failPtySpawnExecute(ctx, err, {
+      sessionId: ctx.effectiveSessionId,
+      ownsNewSession: ctx.isMintedSessionId,
+      telemetry: args.telemetry
+    })
   } finally {
     if (ctx.preAllocatedHandle) {
       ctx.deps.trustedTerminalHandleEnv.delete(ctx.preAllocatedHandle)

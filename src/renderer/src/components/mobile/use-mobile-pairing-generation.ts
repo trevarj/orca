@@ -10,10 +10,8 @@ import type { MobileRelayMintFailure } from '../../../../shared/mobile-relay-min
 type MutableRef<T> = { current: T }
 
 /**
- * Mints (or rotates) a pairing QR. Every caller must go through this path so
- * signed-out Anywhere is refused rather than silently degraded to a local-only
- * code under the Relay label. Anywhere mint failures surface relayFailure and
- * clear any QR.
+ * Mint through one guarded path: signed-out Relay cannot degrade to a mislabeled local-only QR;
+ * Relay failures clear the code. Iroh offers are key-only and never include a selected LAN address.
  */
 export function useMobilePairingGeneration(params: {
   connectionMode: MobilePairingConnectionMode
@@ -69,7 +67,7 @@ export function useMobilePairingGeneration(params: {
         setPairLoading(true)
       }
       try {
-        const address = addressOverride ?? selectedAddress
+        const address = preferredMode === 'iroh' ? undefined : (addressOverride ?? selectedAddress)
         const result = await window.api.mobile.getPairingQR({
           ...(address ? { address } : {}),
           connectionMode: preferredMode,
@@ -98,8 +96,7 @@ export function useMobilePairingGeneration(params: {
               refreshAuthStatus()
             } else {
               setRelayMintFailure(null)
-              // Why: IPC now forwards reason/guidance for all unavailability paths;
-              // prefer that copy over a hard-coded WebSocket-only message.
+              // Prefer host reason/guidance across all unavailable states instead of assuming WebSocket failure.
               toast.error(
                 result.guidance ??
                   translate(

@@ -230,8 +230,7 @@ describe('OrcaRuntimeRpcServer', () => {
       if (!anywhere.available) {
         throw new Error('WebSocket pairing unavailable')
       }
-      // Why: a QR displayed under the local-only pledge must not become an
-      // anywhere-capable credential; the policy switch mints a fresh token.
+      // Changing local-only policy must mint a new token; an already-shown QR cannot silently gain anywhere access.
       expect(anywhere.deviceId).not.toBe(local.deviceId)
       expect(server.getDeviceRegistry()?.getDevice(local.deviceId)).toBeNull()
       expect(anywhere.connectionMode).toBe('automatic')
@@ -280,8 +279,7 @@ describe('OrcaRuntimeRpcServer', () => {
       if (!first.available) {
         throw new Error('WebSocket pairing unavailable')
       }
-      // Why: a same-mode remint (e.g. two windows converging after a
-      // preference sync) must not race rotations off each other's token.
+      // Same-mode remints from converging windows must not rotate using each other's tokens.
       const second = await server.createMobilePairingOffer({ address: '100.64.1.20' })
       expect(second.available).toBe(true)
       if (!second.available) {
@@ -422,7 +420,7 @@ describe('OrcaRuntimeRpcServer', () => {
     }
   })
 
-  it('mints iroh mode offers with iroh.endpointId, LAN endpoint, and no relay', async () => {
+  it('mints iroh key-dial offers without advertising a stale LAN endpoint or relay', async () => {
     const userDataPath = mkdtempSync(join(tmpdir(), 'orca-runtime-rpc-'))
     const endpointId = 'c'.repeat(64)
     const server = new OrcaRuntimeRpcServer({
@@ -464,6 +462,7 @@ describe('OrcaRuntimeRpcServer', () => {
       expect(parsed).toEqual(
         expect.objectContaining({
           scope: 'mobile',
+          endpoint: `iroh://${endpointId}`,
           iroh: { endpointId }
         })
       )

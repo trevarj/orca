@@ -35,21 +35,32 @@ export function profileStateAccessMachineIdentity(): string | null {
           ? `win32-machine-guid:${value}`
           : null
     } else if (process.platform === 'darwin') {
+      // kern.hostuuid does not exist on macOS (#29259).
       const result = runProcessSync({
-        program: '/usr/sbin/sysctl',
-        args: ['-n', 'kern.hostuuid'],
+        program: '/usr/sbin/ioreg',
+        args: ['-rd1', '-c', 'IOPlatformExpertDevice'],
         timeoutMs: 1_000,
-        maxOutputBytes: 1024
+        maxOutputBytes: 64 * 1024
       })
-      machineIdentity = result.code === 0 ? result.stdout.trim() || null : null
+      machineIdentity = result.code === 0 ? parseDarwinPlatformUuid(result.stdout) : null
     }
   } catch {
-    // Missing machine identity cannot establish ownership across a reboot.
+    // Missing identity cannot prove ownership across reboot.
   }
   return machineIdentity
 }
 
-/** A kernel boot UUID survives hostname changes without conflating machines sharing a profile. */
+/** Match the lowercase UUID read by the SSH machine-home probe. */
+export function parseDarwinPlatformUuid(ioregOutput: string): string | null {
+  const value = /"IOPlatformUUID"\s*=\s*"([^"]*)"/u.exec(ioregOutput)?.[1]?.toLowerCase()
+  return value &&
+    /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(value) &&
+    !/^[0-]+$/u.test(value)
+    ? value
+    : null
+}
+
+/** Boot identity survives hostname changes without conflating machines sharing a profile. */
 export function profileStateAccessBootIdentity(): string | null {
   if (bootIdentity !== undefined) {
     return bootIdentity
@@ -68,7 +79,7 @@ export function profileStateAccessBootIdentity(): string | null {
       bootIdentity = result.code === 0 ? result.stdout.trim() || null : null
     }
   } catch {
-    // Unavailable identity leaves the conservative hostname and PID checks in force.
+    // Fall back conservatively to hostname/PID checks.
   }
   return bootIdentity
 }

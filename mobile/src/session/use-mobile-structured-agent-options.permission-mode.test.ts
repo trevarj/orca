@@ -13,7 +13,6 @@ function optionsFor(permissionMode?: string): AgentSessionOptionsResult {
   }
 }
 
-/** Answers each options read with the next mode in `modes`, repeating the last. */
 function optionsClient(...modes: (string | undefined)[]) {
   let reads = 0
   const client: RpcClient = {
@@ -45,7 +44,14 @@ function optionsClient(...modes: (string | undefined)[]) {
 }
 
 type Controller = ReturnType<typeof useMobileStructuredAgentOptions>
-type ProbeProps = { client: RpcClient; fence: number; optionStamp: string; agent?: string }
+type ProbeProps = {
+  client: RpcClient
+  fence: number
+  optionStamp: string
+  agent?: string
+  hostAdvertisesPermissionModes?: boolean | null
+  permissionOwn?: boolean
+}
 
 const mutate: StructuredAgentSessionMutate = vi.fn()
 
@@ -59,7 +65,15 @@ async function mountOptions(props: ProbeProps) {
       enabled: true,
       fence: probe.fence,
       mutate,
-      optionStamp: probe.optionStamp
+      optionStamp: probe.optionStamp,
+      hostSupport:
+        probe.hostAdvertisesPermissionModes === null
+          ? null
+          : {
+              permissionModes: probe.hostAdvertisesPermissionModes ?? true,
+              permissionOwn: probe.permissionOwn,
+              statusFeed: false
+            }
     })
     return null
   }
@@ -102,7 +116,81 @@ async function mountOptions(props: ProbeProps) {
   }
 }
 
+// STA-10671: a 1.4.224 host ignores per-chat modes and runs its own Agent Permissions.
+describe('the permission pill against a host predating per-chat modes', () => {
+  it("says the chat runs the host's Agent Permissions, and offers nothing to pick", async () => {
+    const options = await mountOptions({
+      client: optionsClient(undefined).client,
+      fence: 1,
+      optionStamp: 'gpt-live|',
+      hostAdvertisesPermissionModes: false
+    })
+    expect(options.permission()).toBe('host')
+    expect(options.offered()).toEqual(['host'])
+    await options.unmount()
+  })
+
+  // 1.4.225–1.4.226 apply modes without advertising the capability: their stated mode wins.
+  it('shows the mode a host states even when it does not advertise per-chat modes', async () => {
+    const options = await mountOptions({
+      client: optionsClient('ask').client,
+      fence: 1,
+      optionStamp: 'gpt-live|ask',
+      hostAdvertisesPermissionModes: false
+    })
+    expect(options.permission()).toBe('ask')
+    await options.unmount()
+  })
+
+  it('shows no host pill before the host capability probe answers', async () => {
+    const options = await mountOptions({
+      client: optionsClient(undefined).client,
+      fence: 1,
+      optionStamp: 'gpt-live|',
+      hostAdvertisesPermissionModes: null
+    })
+    expect(options.permission()).toBeNull()
+    await options.unmount()
+  })
+})
+
 describe('the permission mode on the phone', () => {
+  it('writes only a concrete per-chat choice even when it matches the report for Own', async () => {
+    vi.mocked(mutate).mockReset()
+    vi.mocked(mutate).mockResolvedValue({
+      status: 'accepted',
+      value: { options: { permissionMode: 'full-access' } },
+      sameFence: true
+    })
+    const client: RpcClient = {
+      ...optionsClient().client,
+      sendRequest: async () => ({
+        id: 'rpc-1',
+        ok: true,
+        result: {
+          ...optionsFor('own'),
+          current: {
+            model: 'gpt-live',
+            permissionMode: 'own',
+            reportedPermissionMode: 'full-access'
+          }
+        },
+        _meta: { runtimeId: 'runtime-1' }
+      })
+    }
+    const options = await mountOptions({ client, fence: 1, optionStamp: '', permissionOwn: true })
+    expect(options.permission()).toBe('full-access')
+    expect(options.offered()).not.toContain('own')
+    await options.pick('full-access')
+    expect(mutate).toHaveBeenCalledExactlyOnceWith(
+      'agentSession.setOption',
+      'agentSession.setOption',
+      { key: 'permissionMode', value: 'full-access' }
+    )
+    await options.unmount()
+    vi.mocked(mutate).mockReset()
+  })
+
   it('re-reads once when the host status moves, so a desktop pick shows here', async () => {
     const rpc = optionsClient('ask', 'full-access')
     const options = await mountOptions({
@@ -149,7 +237,6 @@ describe('the permission mode on the phone', () => {
   })
 })
 
-/** A host whose account listing lands only after the chat's first options read. */
 function listingLandsLaterClient() {
   let landed = false
   let land: () => void = () => {}
@@ -166,7 +253,6 @@ function listingLandsLaterClient() {
       await lands
       return { origin: 'probe', fetchedAt: 1, models: rows }
     }
-    // At rest, a read before the listing lands answers from the agent's built-in list.
     return landed
       ? { models: rows, current: { model: 'opus[1m]', permissionMode: 'ask' } }
       : {
@@ -196,7 +282,7 @@ function listingLandsLaterClient() {
 }
 
 describe('Approve for me on a phone chat opened before its account was listed', () => {
-  it('is offered once the listing lands', async () => {
+  it('is offered before and after the listing lands', async () => {
     const host = listingLandsLaterClient()
     const options = await mountOptions({
       client: host.client,
@@ -204,10 +290,10 @@ describe('Approve for me on a phone chat opened before its account was listed', 
       optionStamp: '',
       agent: 'claude'
     })
-    expect(options.offered()).toEqual(['ask', 'accept-edits', 'full-access'])
+    expect(options.offered()).toEqual(['ask', 'accept-edits', 'auto', 'full-access'])
     host.land()
     await options.rerender({})
-    expect(options.offered()).toContain('auto')
+    expect(options.offered()).toEqual(['ask', 'accept-edits', 'auto', 'full-access'])
     await options.unmount()
   })
 })

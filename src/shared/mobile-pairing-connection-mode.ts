@@ -12,14 +12,8 @@ export function parseMobilePairingConnectionMode(value: unknown): MobilePairingC
   return 'automatic'
 }
 
-/**
- * Resolve the pairing path to preselect.
- *
- * A signed-out desktop starts on LAN: Relay's one-click sign-in links this
- * desktop to an Orca account, so it must be an explicit choice. The saved value
- * cannot tell us that, because the settings default persists `automatic`.
- * A click on Relay still selects it; signing in restores a saved Anywhere.
- */
+/** Signed-out desktops default to LAN: Relay sign-in links an account and needs an explicit choice; persisted automatic does not prove consent.
+ * Explicit Relay remains selectable; sign-in restores saved Anywhere. */
 export function resolveMobilePairingConnectionMode(
   saved: MobilePairingConnectionMode | null | undefined,
   context: { signedIn: boolean }
@@ -37,10 +31,7 @@ export function isMobilePairingRelayDisabled(mode: MobilePairingConnectionMode):
   return mode === 'local-only' || mode === 'iroh'
 }
 
-/**
- * Mode encoded into a pairing QR. Anywhere cannot be committed without a
- * signed-in desktop session for Relay.
- */
+/** Anywhere QR mode requires a signed-in desktop Relay session. */
 export function effectiveMobilePairingConnectionMode(args: {
   preferred: MobilePairingConnectionMode
   signedIn: boolean
@@ -51,13 +42,7 @@ export function effectiveMobilePairingConnectionMode(args: {
   return args.preferred
 }
 
-/**
- * Whether a scannable pairing offer may be minted for the selected path. Anywhere
- * (Relay) needs a signed-in desktop; minting a local-only QR under the Relay
- * label would misrepresent what the code encodes, so both surfaces gate
- * generation on this rather than silently degrading to local-only.
- * Iroh and LAN do not require sign-in (endpoint readiness is a separate UI gate).
- */
+/** Gate both mint surfaces: unsigned Anywhere cannot silently produce a LAN-only QR under the Relay label. Iroh and LAN need no sign-in. */
 export function canMintMobilePairingOffer(args: {
   connectionMode: MobilePairingConnectionMode
   signedIn: boolean

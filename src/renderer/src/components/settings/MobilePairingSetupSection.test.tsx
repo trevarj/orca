@@ -99,8 +99,7 @@ describe('MobilePairingSetupSection', () => {
       addressDisclosureForcedOpen: true
     })
     expect(screen.getByRole('combobox')).toBeVisible()
-    // Why: a trigger here could not collapse the pinned-open picker, so it would
-    // be a dead control advertising aria-expanded it does not own.
+    // Pinned-open pickers need no dead collapse trigger claiming aria-expanded ownership.
     expect(screen.queryByRole('button', { name: /Also use a faster local path/i })).toBeNull()
   })
 
@@ -122,14 +121,27 @@ describe('MobilePairingSetupSection', () => {
     expect(screen.getByRole('button', { name: 'Generate QR code' })).toBeDisabled()
   })
 
+  it('generates an Iroh code without showing or requiring a LAN address', async () => {
+    const { user, onGenerateQr } = renderSection({
+      connectionMode: 'iroh',
+      selectedAddress: undefined,
+      addressDisclosureForcedOpen: true
+    })
+    expect(screen.queryByRole('combobox')).toBeNull()
+    expect(screen.queryByText('This computer’s address')).toBeNull()
+    const generate = screen.getByRole('button', { name: 'Generate QR code' })
+    expect(generate).toBeEnabled()
+    await user.click(generate)
+    expect(onGenerateQr).toHaveBeenCalledOnce()
+  })
+
   it('can move retry recovery into the persistent failure notice', () => {
     renderSection({ showGenerateAction: false })
     expect(screen.queryByRole('button', { name: 'Generate QR code' })).toBeNull()
   })
 
   it('disables generate when sign-in is required', () => {
-    // The sign-in explanation lives in the connection panel above, not here, so
-    // this section only gates the button rather than repeating the copy.
+    // Connection controls above own sign-in guidance; only gate Generate here.
     renderSection({ canGenerate: false })
     expect(screen.getByRole('button', { name: 'Generate QR code' })).toBeDisabled()
     expect(screen.queryByText(/Sign in above first/i)).toBeNull()

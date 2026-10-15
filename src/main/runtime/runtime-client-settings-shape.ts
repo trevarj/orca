@@ -7,11 +7,13 @@ import type { SourceControlAiActionDefaults } from '../../shared/source-control-
 export type RuntimeClientSettings = Pick<
   GlobalSettings,
   | 'defaultTuiAgent'
+  | 'newWorkspaceSetupOnly'
   | 'disabledTuiAgents'
   | 'agentCmdOverrides'
   | 'agentDefaultArgs'
   | 'agentDefaultEnv'
   | 'agentStatusHooksEnabled'
+  | 'claudeSubagentNavigationEnabled'
   | 'terminalCopyTrimsGutter'
   | 'defaultTaskSource'
   | 'defaultTaskViewPreset'
@@ -51,6 +53,8 @@ export type RuntimeHostDisplayLabelOverrides = Partial<
 export type RuntimeClientSettingsUpdate = Pick<
   Partial<GlobalSettings>,
   | 'agentStatusHooksEnabled'
+  | 'claudeSubagentNavigationEnabled'
+  | 'experimentalConnectors'
   | 'defaultTuiAgent'
   | 'disabledTuiAgents'
   | 'agentDefaultArgs'

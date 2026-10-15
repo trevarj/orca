@@ -20,7 +20,7 @@ export type SnapshotFrameOptions = {
   truncatedByByteBudget?: boolean
   /** History rows this image carries above its screen; 0 tells the client to keep its own. */
   scrollbackRows?: number
-  // Why: distinguishes "I could not answer right now" from a genuinely empty buffer; omitted on success.
+  // Distinguish temporary unavailability from an empty buffer; omit on success.
   unavailable?: TerminalSnapshotUnavailableReason
   source?: 'headless' | 'renderer'
   oscLinks?: TerminalOscLinkRange[]
@@ -63,13 +63,18 @@ export type TerminalMultiplexStream = {
   ackInFlightBytes: number
   ackWindowBytes: number
   supportsOutputPause: boolean
+  // Why: lets the client skip the reveal snapshot when a pause discarded nothing.
+  supportsOutputPauseDropNotice: boolean
+  pausedOutputDropNoticeSent: boolean
   supportsWriteUnavailable: boolean
+  // Also sends WriteUnavailable unprompted when the PTY's daemon endpoint drops.
+  supportsEndpointLossNotice: boolean
   // Set only when the client negotiated `inputAck`; sequenced Input frames are then deduped and acked.
   inputSessionId: string | null
   outputPaused: boolean
   supportsDesktopViewportClaims: boolean
   desktopClaimTail: Promise<boolean>
-  // Whether THIS stream registered the width driver, so detach won't release a peer stream's floor.
+  // Only this stream's floor may be released on detach.
   registeredRemoteDesktopDriver: boolean
   remoteDesktopSubscriptionKey: string
   pendingRemoteDesktopViewport: { cols: number; rows: number } | null
@@ -92,7 +97,7 @@ export type TerminalMultiplexStream = {
   unsubscribeFit: () => void
   unsubscribeDriver: () => void
   unregisterBinaryHandler: () => void
-  // Why: the runtime drops the exit-waiter only on real PTY exit; abort on detach so a never-exiting agent terminal doesn't leak the waiter.
+  // Abort on detach: runtime releases exit-waiters only on real PTY exit, so long-lived agents would leak them.
   exitWaiterAbort: AbortController
 }
 

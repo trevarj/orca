@@ -1,13 +1,10 @@
 import { Duplex } from 'node:stream'
 import type { PipedChildProcess } from '@orca/process-host/process-spec'
-import type { RemoteCommandChannel } from '../ssh/remote-install-transport'
+import type { RemoteCommandChannel } from '../managed-server/install/remote-install-transport'
 
-/**
- * A `wsl.exe` child shaped like an SSH exec channel: reads are its stdout, writes its stdin.
- * Emits `exit` with the code, then `close` once its stdio is gone — never `close` first.
- */
+/** Expose wsl.exe stdio as an SSH-style channel; exit reports status and close follows stdio teardown. */
 export function wrapWslCommandProcess(child: PipedChildProcess): RemoteCommandChannel {
-  // Why emitClose off: like ssh2, `close` comes once, after the exit status, from the child.
+  // Only the child emits close, once after exit status, like ssh2.
   const duplex = new Duplex({
     emitClose: false,
     read() {
@@ -52,12 +49,12 @@ export function wrapWslCommandProcess(child: PipedChildProcess): RemoteCommandCh
   child.stdout.on('end', () => duplex.push(null))
   child.stdout.on('error', onError)
   child.stdin.on('error', ignoreStreamError)
-  // Consumers add their own; this only keeps an unread stderr's error from crashing main.
+  // Drain errors on unread stderr so they cannot crash main; consumers may add their own listeners.
   child.stderr.on('error', ignoreStreamError)
   child.on('exit', onExit)
   child.on('close', onClose)
   child.on('error', onError)
-  Object.assign(duplex, {
+  const channel: RemoteCommandChannel = Object.assign(duplex, {
     stdin: child.stdin,
     stderr: child.stderr,
     close: () => {
@@ -66,6 +63,5 @@ export function wrapWslCommandProcess(child: PipedChildProcess): RemoteCommandCh
       }
     }
   })
-  // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: `stdin`, `stderr` and `close` were assigned above and `exit`/`close` are emitted by the listeners.
-  return duplex as unknown as RemoteCommandChannel
+  return channel
 }

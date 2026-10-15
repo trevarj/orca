@@ -43,7 +43,7 @@ describe('registerMobileHandlers iroh pairing', () => {
     })
   })
 
-  it('allows Iroh pairing without a network interface', async () => {
+  it.each([undefined, '100.64.1.20'])('pairs Iroh without LAN setup (address: %s)', async (address) => {
     const createMobilePairingOffer = vi.fn().mockResolvedValue({
       available: true,
       pairingUrl: 'orca://pair#iroh',
@@ -52,13 +52,21 @@ describe('registerMobileHandlers iroh pairing', () => {
       connectionMode: 'iroh'
     })
 
-    // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: The handler under test reads only createMobilePairingOffer.
-    registerMobileHandlers({ createMobilePairingOffer } as never)
-    await handlers.get('mobile:getPairingQR')?.(null, { connectionMode: 'iroh' })
+    // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: The handler reads only the pairing offer and network bind host.
+    registerMobileHandlers({
+      createMobilePairingOffer,
+      getNetworkExposureBindHost: () => '0.0.0.0'
+    } as never)
+    const result = await handlers.get('mobile:getPairingQR')?.(null, {
+      address,
+      connectionMode: 'iroh'
+    })
 
     expect(createMobilePairingOffer).toHaveBeenCalledWith(
       expect.objectContaining({ address: null, connectionMode: 'iroh' })
     )
+    expect(networkInterfacesMock).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ available: true, endpoint: `iroh://${'a'.repeat(64)}` })
   })
 
   it('reports iroh endpoint bind status for the pairing path picker', () => {
