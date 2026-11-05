@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => {
     handle: vi.fn(),
     resolveEnvironment: vi.fn(),
     removeEnvironment: vi.fn(),
+    listEnvironments: vi.fn(),
     retire: vi.fn(),
     closeRequest: vi.fn(),
     getStatus: vi.fn(),
@@ -29,11 +30,16 @@ vi.mock('electron', () => ({
 }))
 vi.mock(
   '../../../shared/remote-runtime/host-store/runtime-environment-store',
-  async (importOriginal) => ({
-    ...(await importOriginal<typeof RuntimeEnvironmentStore>()),
-    removeEnvironment: mocks.removeEnvironment,
-    resolveEnvironment: mocks.resolveEnvironment
-  })
+  async (importOriginal) => {
+    const actual = await importOriginal<typeof RuntimeEnvironmentStore>()
+    mocks.listEnvironments.mockImplementation(actual.listEnvironments)
+    return {
+      ...actual,
+      listEnvironments: mocks.listEnvironments,
+      removeEnvironment: mocks.removeEnvironment,
+      resolveEnvironment: mocks.resolveEnvironment
+    }
+  }
 )
 vi.mock('./runtime-environment-removal-cleanup', () => ({
   retireRemovedRuntimeEnvironment: mocks.retire
@@ -61,6 +67,10 @@ vi.mock('../../orcad/orcad-artifact-materializer', () => ({ hasOrcadTemplate: ()
 vi.mock('../../ssh/orcad-terminal-census-client', () => ({ requestOrcadTerminalCensus: vi.fn() }))
 
 import { registerWslHostHandlers } from '../wsl/wsl-host-handlers'
+import {
+  registerManagedServerActions,
+  type ManagedServerActions
+} from '../../runtime/managed-server-actions-registry'
 import { registerRuntimeEnvironmentConnectivityHandlers } from './runtime-environment-connectivity-handlers'
 import {
   findWslHostDeployment,
@@ -191,6 +201,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs()
+  registerManagedServerActions(null)
 })
 
 describe('runtimeEnvironments:connect by host kind', () => {
@@ -293,6 +304,58 @@ describe('runtimeEnvironments:remove by host kind', () => {
     expect(mocks.retire).toHaveBeenCalledWith(id, expect.any(Function), expect.anything(), '/u')
     // Removed by its own id, so no legacy-selector transport is closed.
     expect(mocks.closeRequest).not.toHaveBeenCalled()
+  })
+})
+
+describe('runtimeEnvironments:remove for a managed server saved twice', () => {
+  // The same server reached through a second SSH alias: its own target, the same host key.
+  const twin = {
+    ...HOSTS.sshManaged,
+    id: 'ssh-2',
+    name: 'Managed (alias)',
+    orcadDeployment: { ...HOSTS.sshManaged.orcadDeployment, sshTargetId: 't3' }
+  }
+  const forget = vi.fn<ManagedServerActions['forget']>()
+
+  beforeEach(() => {
+    // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: removal only forgets.
+    registerManagedServerActions({ forget } as unknown as ManagedServerActions)
+    useHost('sshManaged')
+  })
+
+  it('unlinks this entry through managed forget and leaves the other entry managing the host', async () => {
+    mocks.listEnvironments.mockReturnValueOnce([HOSTS.sshManaged, twin])
+    forget.mockResolvedValueOnce({
+      outcome: 'forgotten',
+      verdict: 'unverifiable',
+      environmentId: 'ssh-1',
+      sshTargetId: 't1'
+    })
+    await expect(
+      handler('runtimeEnvironments:remove')(null, { selector: 'ssh-1' })
+    ).resolves.toEqual({ removed: redacted('sshManaged') })
+    expect(forget).toHaveBeenCalledWith('ssh-1')
+    expect(mocks.removeEnvironment).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a forget refusal instead of reporting the entry removed', async () => {
+    mocks.listEnvironments.mockReturnValueOnce([HOSTS.sshManaged, twin])
+    forget.mockResolvedValueOnce({
+      outcome: 'refused',
+      verdict: 'unverifiable',
+      code: 'orcad_lifecycle_busy',
+      reason: 'Another change to this server is running.'
+    })
+    await expect(
+      handler('runtimeEnvironments:remove')(null, { selector: 'ssh-1' })
+    ).rejects.toThrow('Another change to this server is running.')
+  })
+
+  it('keeps the managed pairing guard when the other entry does not manage the server', () => {
+    mocks.listEnvironments.mockReturnValueOnce([HOSTS.sshManaged, HOSTS.paired])
+    handler('runtimeEnvironments:remove')(null, { selector: 'ssh-1' })
+    expect(forget).not.toHaveBeenCalled()
+    expect(mocks.removeEnvironment).toHaveBeenCalledWith('/u', 'ssh-1')
   })
 })
 
