@@ -351,11 +351,21 @@ describe('runtimeEnvironments:remove for a managed server saved twice', () => {
     ).rejects.toThrow('Another change to this server is running.')
   })
 
-  it('keeps the managed pairing guard when the other entry does not manage the server', () => {
-    mocks.listEnvironments.mockReturnValueOnce([HOSTS.sshManaged, HOSTS.paired])
-    handler('runtimeEnvironments:remove')(null, { selector: 'ssh-1' })
+  it.each([
+    [
+      'manages a different server',
+      { ...twin, endpoints: [{ ...endpoints[0], publicKeyB64: 'k2' }] }
+    ],
+    ['only pairs with the server', HOSTS.paired]
+  ])('leaves the managed pairing to the store guard when the other entry %s', (_, other) => {
+    mocks.listEnvironments.mockReturnValueOnce([HOSTS.sshManaged, other])
+    mocks.removeEnvironment.mockImplementationOnce(() => {
+      throw new Error('managed pairing refused')
+    })
+    expect(() => handler('runtimeEnvironments:remove')(null, { selector: 'ssh-1' })).toThrow(
+      'managed pairing refused'
+    )
     expect(forget).not.toHaveBeenCalled()
-    expect(mocks.removeEnvironment).toHaveBeenCalledWith('/u', 'ssh-1')
   })
 })
 
