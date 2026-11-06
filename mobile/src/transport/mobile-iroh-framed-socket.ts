@@ -334,8 +334,7 @@ function decodeIrohPayload(payload: Uint8Array): string | Uint8Array {
   return new TextDecoder().decode(payload)
 }
 
-// Why: chunked fromCharCode — frames approach 1 MiB and per-byte string
-// concat is O(n) allocations on Hermes.
+// Chunked fromCharCode avoids Hermes argument limits for sealed 8 MiB binary frames.
 const BASE64_CHUNK = 0x8000
 
 /** Base64-encodes bridge frames with bounded fromCharCode calls, including large Hermes frames. */

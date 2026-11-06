@@ -8,90 +8,7 @@ import { encodeLengthPrefixedFrame } from './iroh-frame-codec'
 import { IROH_ENDPOINT_SECRET_FILENAME } from './iroh-endpoint-secret'
 import { IrohModuleLoadError } from './iroh-endpoint-bind'
 import { IrohTransport } from './iroh-transport'
-
-class FakeRecv {
-  private chunks: number[][] = []
-  private waiters: ((value: number[]) => void)[] = []
-
-  push(chunk: number[]): void {
-    const waiter = this.waiters.shift()
-    if (waiter) {
-      waiter(chunk)
-      return
-    }
-    this.chunks.push(chunk)
-  }
-
-  end(): void {
-    this.push([])
-  }
-
-  async read(_limit: number): Promise<number[]> {
-    if (this.chunks.length > 0) {
-      return this.chunks.shift()!
-    }
-    const pending = Promise.withResolvers<number[]>()
-    this.waiters.push(pending.resolve)
-    return await pending.promise
-  }
-}
-
-class FakeSend {
-  readonly written: number[][] = []
-  async writeAll(buf: number[]): Promise<void> {
-    this.written.push(buf)
-  }
-}
-
-function createFakeBind(recv: FakeRecv, send: FakeSend, endpointId = 'a'.repeat(64)) {
-  const bi = { send, recv }
-  const connection = {
-    close: vi.fn(),
-    acceptBi: vi.fn(async () => bi)
-  }
-  const accepting = {
-    connect: vi.fn(async () => connection)
-  }
-  const incoming = {
-    accept: vi.fn(async () => accepting),
-    refuse: vi.fn(async () => {})
-  }
-  let acceptResolve: ((value: typeof incoming | null) => void) | null = null
-  const endpoint = {
-    online: vi.fn(async () => {}),
-    acceptNext: vi.fn(async () => {
-      const pending = Promise.withResolvers<typeof incoming | null>()
-      acceptResolve = pending.resolve
-      return await pending.promise
-    }),
-    close: vi.fn(async () => {
-      acceptResolve?.(null)
-    }),
-    id: () => ({ toString: () => endpointId }),
-    addr: () => ({
-      relayUrl: () => 'https://actual.relay.example/',
-      directAddresses: () => ['192.168.1.2:1234', '[::1]:1234']
-    })
-  }
-  const bound = {
-    // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: The double provides every Endpoint method used by IrohTransport.
-    endpoint: endpoint as unknown as Endpoint,
-    endpointId
-  }
-  return {
-    endpointId,
-    bound,
-    endpoint,
-    connection,
-    accepting,
-    incoming,
-    bi,
-    pushIncoming: (next = incoming) => acceptResolve?.(next),
-    bindEndpoint: vi.fn(
-      async (_secretKey: number[], _alpn: number[], _relayUrl: string | null) => bound
-    )
-  }
-}
+import { createFakeBind, FakeRecv, FakeSend } from './iroh-transport.test-fixture'
 
 describe('IrohTransport', () => {
   const dirs: string[] = []
@@ -356,7 +273,7 @@ describe('IrohTransport', () => {
     })
   })
 
-  it('terminates on oversize frames', async () => {
+  it('rejects a pre-authentication frame above 1 MiB before reading its payload', async () => {
     const userDataPath = mkdtempSync(join(tmpdir(), 'iroh-transport-'))
     dirs.push(userDataPath)
     const recv = new FakeRecv()
@@ -373,7 +290,7 @@ describe('IrohTransport', () => {
     fake.pushIncoming()
 
     const header = Buffer.alloc(4)
-    header.writeUInt32BE(2 * 1024 * 1024, 0)
+    header.writeUInt32BE(1_048_577, 0)
     recv.push(Array.from(header))
 
     await vi.waitFor(() => {

@@ -2,10 +2,11 @@ import Foundation
 // IrohLib.swift is compiled into this same ExpoIroh target (vendored bindings).
 
 /// Owns the local Endpoint and live dialed connections (one bi-stream each).
-/// Framing: 4-byte big-endian u32 length + payload; max 1 MiB.
+/// Framing: 4-byte big-endian u32 length + bounded raw payload.
 final class IrohClient {
   static let alpn = Data("orca-mobile-rpc/1".utf8)
-  static let maxFrame = 1 * 1024 * 1024
+  // max(base64(4 MiB + 82), 8 MiB + 82); E2EEv2 adds 24 nonce + 16 MAC + 42 header bytes.
+  static let maxFrame = 8 * 1024 * 1024 + 82
   static let pathPollNanos: UInt64 = 2_000_000_000
 
   var onMessage: ((String, String) -> Void)?
@@ -112,7 +113,7 @@ final class IrohClient {
     }
   }
 
-  /// Validate a base64 payload of at most 1 MiB and serialize its length-prefixed write.
+  /// Decode bridge base64 before applying the raw wire cap and serializing the framed write.
   func send(connectionId: String, bytesBase64: String) async throws {
     guard let live = locked({ destroyed ? nil : connections[connectionId] }) else {
       throw IrohClientError.unknownConnection
