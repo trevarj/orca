@@ -5,6 +5,7 @@ import { useMobileTranslation } from '../i18n/use-mobile-translation'
 import { colors } from '../theme/mobile-theme'
 import { useMobileColorScheme } from '../theme/use-mobile-color-scheme'
 import { classifyConnection } from '../transport/connection-health'
+import { getIrohHostStatus, irohStatusDisplayLabel } from '../transport/mobile-iroh-host-status'
 import { resolveHomeHostConnectionState } from '../transport/home-host-auto-connect'
 import type { ConnectionState, HostCatalogEntry } from '../transport/types'
 import type { HostWorktreeInfo } from '../worktree/home-worktree-info'
@@ -100,6 +101,7 @@ const MobileHomeHostRow = memo(function MobileHomeHostRow(props: MobileHomeHostR
     reconnectAttempts: props.hostAttempts[item.id] ?? 0,
     lastConnectedAt: props.hostLastConnected[item.id] ?? null,
     endpoint: item.endpoint,
+    irohHint: irohStatusDisplayLabel(getIrohHostStatus(item.id)),
     pendingPath: connection?.pendingPath ?? null,
     pairingRejected: connection?.pairingRejected ?? false,
     relayHostReachability: connection?.relayHostReachability ?? 'connecting',

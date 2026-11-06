@@ -17,6 +17,7 @@ const {
   verifyMacTerminalHost
 } = require('./scripts/macos/terminal-host-bundle/macos-terminal-host-bundle.cjs')
 const {
+  assertPackagedIrohNativeVariantInstalled,
   assertPackagedNativeVariantsInstalled,
   assertProcessHostOutputBuilt,
   createPackagedRuntimeNodeModuleResources,
@@ -393,6 +394,12 @@ module.exports = {
     ensureWaylandClipboard = ensureBundledWaylandClipboard,
     orcadTemplateDir = join(__dirname, '..', orcadTemplateExtraResource.from)
   ) => {
+    if (
+      process.env.ORCA_LINUX_X64_ONLY_TEMPLATE === '1' &&
+      (context.electronPlatformName !== 'linux' || context.arch !== 1)
+    ) {
+      throw new Error('ORCA_LINUX_X64_ONLY_TEMPLATE is only supported for Linux x64 packages.')
+    }
     // The template is the server every SSH host gets, so a dark test template must never ship.
     assertNotDarkBuild([join(__dirname, '..', 'out', 'main'), mobileWebBundleDir, orcadTemplateDir])
     assertPackagedNativeVariantsInstalled(context.electronPlatformName, context.arch)
@@ -444,6 +451,11 @@ module.exports = {
     }
     stampPackagedCliVersion(resourcesDir, context.packager.appInfo.version)
     prunePackagedRuntimeNodeModules(resourcesDir, context.electronPlatformName, context.arch)
+    assertPackagedIrohNativeVariantInstalled(
+      context.electronPlatformName,
+      context.arch,
+      join(resourcesDir, 'node_modules')
+    )
     assertNoWindowsExecutablesInRuntimeNodeModules(resourcesDir, context.electronPlatformName)
     // Gate native glibc floor after pruning foreign CPU variants; GLIBC_2.34 once broke Ubuntu 20.04 startup (#9902).
     let appImageNodeRuntime = null
@@ -509,6 +521,7 @@ module.exports = {
     }
     await finalizePackagedOrcadTemplate(resourcesDir, {
       platform: context.electronPlatformName,
+      targets: process.env.ORCA_LINUX_X64_ONLY_TEMPLATE === '1' ? ['linux-x64-glibc'] : undefined,
       signMacBinary: (path) =>
         signMacStandaloneHelper(path, 'orcad template binary', context.packager)
     })

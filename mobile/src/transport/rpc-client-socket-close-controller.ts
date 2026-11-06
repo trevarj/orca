@@ -55,7 +55,7 @@ export class RpcClientSocketCloseController {
         this.options.authenticationRetry.reject(AUTH_REJECTED, true)
         return
       }
-      console.log('[net] handleSocketClosed STALE — ignoring (ws already swapped)', {
+      console.log('[net] handleSocketClosed STALE — ignoring (transport already swapped)', {
         state: this.options.connectionState.get(),
         attempt: this.options.reconnect.getAttempt()
       })
@@ -86,7 +86,7 @@ export class RpcClientSocketCloseController {
       attempt: this.options.reconnect.getAttempt()
     })
     this.options.emitWarning(
-      'WebSocket closed',
+      'Transport closed',
       `${closeCode == null ? 'Close code unavailable' : `Close code ${closeCode}`}; reconnect scheduled`,
       { code: 'socket-closed' }
     )

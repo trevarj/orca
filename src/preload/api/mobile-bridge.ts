@@ -70,6 +70,12 @@ export const mobileApi = {
   revokeRuntimeAccess: (args: { deviceId: string }): Promise<{ revoked: boolean }> =>
     ipcRenderer.invoke('mobile:revokeRuntimeAccess', args),
 
+  getIrohStatus: (): Promise<{
+    bound: boolean
+    endpointId: string | null
+    relayUrl: string | null
+  }> => ipcRenderer.invoke('mobile:getIrohStatus'),
+
   getRelayStatus: (): Promise<MobileRelayStatusDetail> =>
     ipcRenderer.invoke('mobile:getRelayStatus'),
 

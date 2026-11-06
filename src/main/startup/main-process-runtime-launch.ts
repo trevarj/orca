@@ -101,10 +101,13 @@ function installRuntimeRpc(
     orcadSidecar: isOrcadSidecarLaunch(),
     serveOptions
   })
+  const profileStore = state.store!
   const runtimeRpc = new OrcaRuntimeRpcServer({
     runtime,
     // Pairing must use pre-setName canonical userData or restarts can lose devices.
     userDataPath: getCanonicalUserDataPath(),
+    irohRelayUrl: profileStore.getSettings().mobileIrohRelayUrl,
+    onStop: () => unsubscribeIrohRelay(),
     enableWebSocket: true,
     // STA-2370: desktop stays loopback until pairing; serve explicitly opts into remote access and E2E needs harness-wide bind.
     exposeNetworkByDefault: Boolean(serveOptions) || isE2E,
@@ -120,6 +123,13 @@ function installRuntimeRpc(
         }
       : {}),
     webClientRoot: getBundledWebClientRoot()
+  })
+  const unsubscribeIrohRelay = profileStore.onSettingsChanged((updates, settings) => {
+    if ('mobileIrohRelayUrl' in updates) {
+      void runtimeRpc.setIrohRelayUrl(settings.mobileIrohRelayUrl).catch(() => {
+        console.warn('[runtime-rpc] Could not apply the saved iroh relay preference')
+      })
+    }
   })
   state.runtimeRpc = runtimeRpc
   runtime.setAgentSenderPeerKey(() => runtimeRpc.getE2EEPublicKey())

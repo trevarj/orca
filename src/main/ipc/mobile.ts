@@ -89,13 +89,15 @@ export function registerMobileHandlers(
         rotate?: boolean
       }
     ) => {
-      // Explicit interfaces support overlay networks unreachable through the default LAN candidate.
+      // Iroh dials by key; stale LAN selections must not advertise an unexposed WS listener.
       const ip =
-        args?.address ??
-        (await getDefaultPairingAddress(
-          rpcServer.getNetworkExposureBindHost(),
-          getDefaultRouteInterfaceNames
-        ))
+        args?.connectionMode === 'iroh'
+          ? null
+          : (args?.address ??
+            (await getDefaultPairingAddress(
+              rpcServer.getNetworkExposureBindHost(),
+              getDefaultRouteInterfaceNames
+            )))
       // Relay works without a direct candidate; LAN-only must refuse when none is usable.
       if (!ip && args?.connectionMode === 'local-only') {
         return {
@@ -133,7 +135,7 @@ export function registerMobileHandlers(
         ...(!qr.ok ? { qrError: qr.reason } : {}),
         pairingUrl: offer.pairingUrl,
         // Unadvertised loopback fallback points at the scanning device; omit it from UI endpoints.
-        endpoint: ip ? offer.endpoint : null,
+        endpoint: ip || offer.connectionMode === 'iroh' ? offer.endpoint : null,
         deviceId: offer.deviceId,
         connectionMode: offer.connectionMode,
         expiresAt: offer.offerExpiresAt
@@ -247,6 +249,8 @@ export function registerMobileHandlers(
     }
     return { revoked: rpcServer.revokeRuntimeAccess(args.deviceId) }
   })
+
+  ipcMain.handle('mobile:getIrohStatus', () => rpcServer.getIrohStatus())
 
   ipcMain.handle('mobile:getWindowsFirewallStatus', (_event, args?: { address?: string }) => {
     const port = getWebSocketPort(rpcServer.getWebSocketEndpoint())

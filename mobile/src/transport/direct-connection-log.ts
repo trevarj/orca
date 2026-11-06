@@ -15,7 +15,11 @@ export class DirectConnectionLog {
     endpoint: string,
     private readonly sink?: ConnectionLogSink
   ) {
-    this.path = isTailscaleEndpoint(endpoint) ? 'tailscale' : 'lan'
+    this.path = endpoint.startsWith('iroh:')
+      ? 'iroh'
+      : isTailscaleEndpoint(endpoint)
+        ? 'tailscale'
+        : 'lan'
   }
 
   emit = (
@@ -33,6 +37,14 @@ export class DirectConnectionLog {
       ...evidence,
       path: evidence?.path ?? this.path
     })
+  }
+
+  emitWarning = (
+    message: string,
+    detail: string,
+    evidence?: Pick<ConnectionLogEntry, 'code' | 'path'>
+  ): void => {
+    this.emit('warn', message, detail, evidence)
   }
 
   livenessTimeout = (evidence: LivenessTimeoutEvidence): void => {

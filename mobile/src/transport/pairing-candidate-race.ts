@@ -28,7 +28,7 @@ function isRefusedReply(reply: RpcResponse): boolean {
   return !reply.ok && reply.error.code === 'unauthorized'
 }
 
-export type PairingCandidatePath = 'direct' | 'relay'
+export type PairingCandidatePath = 'direct' | 'relay' | 'iroh'
 
 export type PairingCandidate = {
   path: PairingCandidatePath
@@ -89,10 +89,13 @@ export function racePairingCandidates(
     function rejectIfFinished(): void {
       if (!settled && failures === candidates.length && successes.length === 0) {
         settled = true
+        const irohOnly = candidates.every((candidate) => candidate.path === 'iroh')
         reject(
           codeRejected
             ? new PairingCodeRejectedError()
-            : new Error('direct and relay pairing paths both failed')
+            : new Error(
+                irohOnly ? 'iroh pairing path failed' : 'direct and relay pairing paths both failed'
+              )
         )
       }
     }

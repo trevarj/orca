@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useAppStore } from '../../../store/index'
 import { useMountedRef } from '@/hooks/useMountedRef'
@@ -47,6 +47,7 @@ export function MobilePane(): React.JSX.Element {
   const signedIn = useAppStore((state) => state.orcaProfileAuthStatus?.state === 'connected')
   const settingsSearchQuery = useAppStore((state) => state.settingsSearchQuery)
   const [connectionMode, setConnectionMode] = useMobilePairingConnectionMode()
+  const irohRelayUrl = useAppStore((state) => state.settings?.mobileIrohRelayUrl ?? null)
   const [rotateNextQr, setRotateNextQr] = useState(false)
   const codeCopiedResetTimerRef = useRef<number | null>(null)
   const wasSignedInRef = useRef(signedIn)
@@ -54,8 +55,9 @@ export function MobilePane(): React.JSX.Element {
   const pairingRequestIdRef = useRef(0)
   // Distinguish cross-window mode sync from this window’s own changes.
   const handledModeRef = useRef(connectionMode)
+  const handledIrohRelayRef = useRef(irohRelayUrl)
   // Keep invalidatePairing stable so QR/loading changes cannot refetch network interfaces.
-  const qrDisplayedRef = useRef(false)
+  const offerDisplayedRef = useRef(false)
   const loadingRef = useRef(false)
   const mountedRef = useMountedRef()
   const {
@@ -66,17 +68,14 @@ export function MobilePane(): React.JSX.Element {
   const revokeDevice = useMobilePairedDeviceRevocation(refreshDevices)
 
   useEffect(() => {
-    qrDisplayedRef.current = qrDataUrl != null
-  }, [qrDataUrl])
-
-  useEffect(() => {
-    loadingRef.current = loading
-  }, [loading])
+    offerDisplayedRef.current = pairingUrl != null
+  }, [pairingUrl])
 
   // Policy/endpoint changes invalidate displayed and pending offers; rotate the next credential instead of reusing the discarded one.
   const invalidatePairing = useCallback((opts: { armRotate?: boolean } = {}): void => {
     pairingRequestIdRef.current += 1
-    const hadPending = qrDisplayedRef.current || loadingRef.current
+    const hadPending = offerDisplayedRef.current || loadingRef.current
+    offerDisplayedRef.current = false
     setQrDataUrl(null)
     setQrSize(null)
     setPairingUrl(null)
@@ -91,7 +90,11 @@ export function MobilePane(): React.JSX.Element {
       setRotateNextQr(true)
     }
   }, [])
-  const invalidatePairingAddress = useCallback(() => invalidatePairing(), [invalidatePairing])
+  const invalidatePairingAddress = useCallback(() => {
+    if (connectionMode !== 'iroh') {
+      invalidatePairing()
+    }
+  }, [connectionMode, invalidatePairing])
   const {
     selectedAddress,
     selectedAddressIsCustom,
@@ -169,13 +172,14 @@ export function MobilePane(): React.JSX.Element {
         return
       }
       const requestId = ++pairingRequestIdRef.current
+      loadingRef.current = true
       setLoading(true)
       setQrError(false)
       try {
         const result = await window.api.mobile.getPairingQR({
-          ...(selectedAddress ? { address: selectedAddress } : {}),
+          ...(preferredMode !== 'iroh' && selectedAddress ? { address: selectedAddress } : {}),
           connectionMode: preferredMode,
-          ...(opts.rotate || rotateNextQr ? { rotate: true } : {})
+          ...((opts.rotate ?? rotateNextQr) ? { rotate: true } : {})
         })
         // Ignore superseded responses whose policy/address selection is no longer current.
         if (requestId !== pairingRequestIdRef.current) {
@@ -184,13 +188,17 @@ export function MobilePane(): React.JSX.Element {
         if (result.available) {
           useAppStore.getState().recordFeatureInteraction('mobile-pairing')
           if (mountedRef.current) {
+            offerDisplayedRef.current = true
             setQrDataUrl(result.qrDataUrl)
             setQrSize(result.qrSize)
             setPairingUrl(result.pairingUrl)
             setQrExpiresAt(result.expiresAt ?? null)
             setQrError(result.qrDataUrl === null)
             setRelayMintFailure(null)
-            setEndpoint(result.endpoint)
+            // Why null for iroh: the caption describes the offer on screen, and an
+            // iroh QR dials by key — showing the ws:// LAN URL reads as "this QR is
+            // bound to that address", which it is not.
+            setEndpoint(result.connectionMode === 'iroh' ? null : result.endpoint)
             setDeviceCountAtQr(getPairedMobileDevicesSnapshot().length)
             clearCodeCopiedResetTimer()
             setCodeCopied(false)
@@ -231,6 +239,7 @@ export function MobilePane(): React.JSX.Element {
         }
       } finally {
         if (mountedRef.current && requestId === pairingRequestIdRef.current) {
+          loadingRef.current = false
           setLoading(false)
         }
       }
@@ -287,7 +296,6 @@ export function MobilePane(): React.JSX.Element {
             kind: 'mobile_pairing_relay_failure',
             preferredConnectionMode: connectionMode,
             failure: relayMintFailure,
-            selectedAddress: selectedAddress ?? null,
             at: new Date().toISOString()
           },
           null,
@@ -309,7 +317,7 @@ export function MobilePane(): React.JSX.Element {
         )
       }
     }
-  }, [connectionMode, mountedRef, relayMintFailure, selectedAddress])
+  }, [connectionMode, mountedRef, relayMintFailure])
 
   // Invalidate cross-window mode changes without writing settings back and creating a sync loop.
   useEffect(() => {
@@ -319,6 +327,22 @@ export function MobilePane(): React.JSX.Element {
     handledModeRef.current = connectionMode
     invalidatePairing({ armRotate: false })
   }, [connectionMode, invalidatePairing])
+
+  useLayoutEffect(() => {
+    if (irohRelayUrl === handledIrohRelayRef.current) {
+      return
+    }
+    handledIrohRelayRef.current = irohRelayUrl
+    if (connectionMode !== 'iroh') {
+      return
+    }
+    const shouldRefresh = offerDisplayedRef.current || loadingRef.current
+    invalidatePairing({ armRotate: false })
+    if (shouldRefresh) {
+      // Main waits for the latest binding and supplies its actual dial hints, without rotating devices.
+      void generateQR({ rotate: false })
+    }
+  }, [connectionMode, generateQR, invalidatePairing, irohRelayUrl])
 
   useEffect(() => {
     void loadNetworkInterfaces()
@@ -404,7 +428,7 @@ export function MobilePane(): React.JSX.Element {
       />
 
       <WindowsFirewallNotice
-        pairingReady={pairingUrl != null}
+        pairingReady={pairingUrl != null && connectionMode !== 'iroh'}
         address={selectedAddress}
         usingRelay={connectionMode === 'automatic'}
       />

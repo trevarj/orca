@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { OrcaRuntimeService } from '../../orca-runtime'
 import { OrcaRuntimeRpcServer } from './runtime-rpc'
+import { DeviceRegistry } from './pairing/device-registry'
 import { parsePairingCode } from '../../../../shared/remote-runtime/pairing/pairing'
 import {
   waitForWsClose,
@@ -51,7 +52,7 @@ const { getWorktreeListingMocks } = vi.hoisted(() => {
 })
 
 describe('OrcaRuntimeRpcServer', () => {
-  it('persists local-only pairing and never mints or later binds Relay', async () => {
+  it('persists local-only pairing and rejects unavailable Iroh without Relay', async () => {
     const userDataPath = mkdtempSync(join(tmpdir(), 'orca-runtime-rpc-'))
     const server = new OrcaRuntimeRpcServer({
       runtime: new OrcaRuntimeService(),
@@ -90,6 +91,12 @@ describe('OrcaRuntimeRpcServer', () => {
           ownerIdentityKey: 'user\0profile\0org'
         })
       ).toBe(false)
+      await expect(
+        server.createMobilePairingOffer({
+          address: '100.64.1.20',
+          connectionMode: 'iroh'
+        })
+      ).resolves.toMatchObject({ available: false, reason: 'iroh_unavailable' })
     } finally {
       await server.stop()
     }
@@ -431,6 +438,80 @@ describe('OrcaRuntimeRpcServer', () => {
       responses.dispose()
       session.ws.close()
       await waitForWsClose(session.ws)
+    } finally {
+      await server.stop()
+    }
+  })
+
+  it('mints iroh key-dial offers without advertising a stale LAN endpoint or relay', async () => {
+    const userDataPath = mkdtempSync(join(tmpdir(), 'orca-runtime-rpc-'))
+    const endpointId = 'c'.repeat(64)
+    const server = new OrcaRuntimeRpcServer({
+      runtime: new OrcaRuntimeService(),
+      userDataPath,
+      enableWebSocket: true,
+      wsPort: 0,
+      irohBindEndpoint: async () => ({
+        // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: The double supplies the endpoint operations consumed by IrohTransport.
+        endpoint: {
+          online: async () => {},
+          acceptNext: async () => null,
+          close: async () => {},
+          id: () => ({ toString: () => endpointId })
+        } as never,
+        endpointId
+      })
+    })
+    const createPairingRelay = vi.fn()
+    server.setMobileRelayPairingProvider({
+      createPairingRelay,
+      onDeviceRevokeQueued: vi.fn(),
+      getEndpoints: vi.fn(),
+      provisionRelay: vi.fn()
+    })
+
+    await server.start()
+    try {
+      const offer = await server.createMobilePairingOffer({
+        address: '100.64.1.20',
+        connectionMode: 'iroh'
+      })
+      expect(offer.available).toBe(true)
+      if (!offer.available) {
+        throw new Error('WebSocket pairing unavailable')
+      }
+      expect(offer.connectionMode).toBe('iroh')
+      expect(createPairingRelay).not.toHaveBeenCalled()
+      const parsed = parsePairingCode(offer.pairingUrl)
+      expect(parsed).toEqual(
+        expect.objectContaining({
+          scope: 'mobile',
+          endpoint: `iroh://${endpointId}`,
+          iroh: { endpointId }
+        })
+      )
+      expect(parsed).not.toHaveProperty('relay')
+      expect(server.getDeviceRegistry()?.getMobilePairingConnectionMode(offer.deviceId)).toBe(
+        'iroh'
+      )
+      const reloaded = new DeviceRegistry(userDataPath)
+      expect(reloaded.getMobilePairingConnectionMode(offer.deviceId)).toBe('iroh')
+      expect(reloaded.validateToken(parsed!.deviceToken)?.deviceId).toBe(offer.deviceId)
+      expect(
+        server.setMobileRelayBinding(offer.deviceId, {
+          relayHostId: 'AbCdEf0123_-xyZ9',
+          relayDeviceId: offer.deviceId,
+          ownerIdentityKey: 'user\0profile\0org'
+        })
+      ).toBe(false)
+
+      vi.spyOn(server, 'getWebSocketEndpoint').mockReturnValue(null)
+      await expect(
+        server.createMobilePairingOffer({ connectionMode: 'iroh' })
+      ).resolves.toMatchObject({
+        available: true,
+        endpoint: `iroh://${endpointId}`
+      })
     } finally {
       await server.stop()
     }

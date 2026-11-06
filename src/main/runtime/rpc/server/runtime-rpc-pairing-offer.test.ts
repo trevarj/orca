@@ -308,6 +308,77 @@ describe('OrcaRuntimeRpcServer', () => {
       await server.stop()
     }
   })
+
+  it('omits iroh from pairing offers when the kill switch disables the transport', async () => {
+    const userDataPath = mkdtempSync(join(tmpdir(), 'orca-runtime-rpc-'))
+    const server = new OrcaRuntimeRpcServer({
+      methods: [],
+      runtime: new OrcaRuntimeService(),
+      userDataPath,
+      enableWebSocket: true,
+      wsPort: 0
+    })
+    await server.start()
+    try {
+      const offer = await server.createMobilePairingOffer({
+        address: '100.64.1.20',
+        name: 'Mobile test',
+        connectionMode: 'local-only'
+      })
+      expect(offer.available).toBe(true)
+      if (!offer.available) {
+        throw new Error('pairing unavailable')
+      }
+      expect(server.getIrohStatus().bound).toBe(false)
+      const parsed = parsePairingCode(offer.pairingUrl)
+      expect(parsed).not.toHaveProperty('iroh')
+    } finally {
+      await server.stop()
+    }
+  })
+
+  // Why: a local-only QR advertising iroh would grant off-LAN reachability via
+  // the public relay — "same network only" must mean exactly that.
+  it('omits iroh from local-only offers even when the transport is bound', async () => {
+    const userDataPath = mkdtempSync(join(tmpdir(), 'orca-runtime-rpc-'))
+    const endpointId = 'b'.repeat(64)
+    const server = new OrcaRuntimeRpcServer({
+      methods: [],
+      runtime: new OrcaRuntimeService(),
+      userDataPath,
+      enableWebSocket: true,
+      wsPort: 0,
+      irohBindEndpoint: async () => ({
+        // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: The double supplies the endpoint operations consumed by IrohTransport.
+        endpoint: {
+          online: async () => {},
+          acceptNext: async () => null,
+          close: async () => {},
+          id: () => ({ toString: () => endpointId })
+        } as never,
+        endpointId
+      })
+    })
+    await server.start()
+    await server.setIrohRelayUrl(null)
+    try {
+      expect(server.getIrohStatus().endpointId).toBe(endpointId)
+      const offer = await server.createMobilePairingOffer({
+        address: '100.64.1.20',
+        name: 'Mobile test',
+        connectionMode: 'local-only'
+      })
+      expect(offer.available).toBe(true)
+      if (!offer.available) {
+        throw new Error('pairing unavailable')
+      }
+      const parsed = parsePairingCode(offer.pairingUrl)
+      expect(parsed).toEqual(expect.objectContaining({ scope: 'mobile' }))
+      expect(parsed).not.toHaveProperty('iroh')
+    } finally {
+      await server.stop()
+    }
+  })
 })
 
 describe('host descriptor publication', () => {
