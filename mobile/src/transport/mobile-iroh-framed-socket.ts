@@ -86,6 +86,7 @@ export class MobileIrohFramedSocket {
   private unsubClosed: { remove: () => void } | null = null
   private unsubPath: { remove: () => void } | null = null
   private pathType: PathType = 'unknown'
+  private sendQueue: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: MobileIrohFramedSocketOptions) {
     trackSocket(this)
@@ -97,32 +98,27 @@ export class MobileIrohFramedSocket {
       return
     }
     const bytes = toUint8Array(data)
-    this.bufferedAmount += bytes.byteLength
+    const byteLength = bytes.byteLength
+    this.bufferedAmount += byteLength
     const connectionId = this.connectionId
     const b64 = uint8ToBase64(bytes)
-    try {
-      const iroh = loadExpoIroh()
-      void iroh
-        .irohSend(connectionId, b64)
-        .then(() => {
-          this.bufferedAmount = Math.max(0, this.bufferedAmount - bytes.byteLength)
-        })
-        .catch((error: unknown) => {
-          this.bufferedAmount = 0
-          this.options.onLog?.(
-            'Iroh send failed',
-            error instanceof Error ? error.message : String(error)
-          )
-          this.fail(1011, 'iroh_send_failed')
-        })
-    } catch (error) {
-      this.bufferedAmount = 0
-      this.options.onLog?.(
-        'Iroh send failed',
-        error instanceof Error ? error.message : String(error)
-      )
-      this.fail(1011, 'iroh_send_failed')
-    }
+    // Expo tasks can reach the native FIFO out of order; enqueue whole frames in JS.
+    this.sendQueue = this.sendQueue.then(async () => {
+      if (this.closed) {
+        return
+      }
+      try {
+        await loadExpoIroh().irohSend(connectionId, b64)
+        this.bufferedAmount = Math.max(0, this.bufferedAmount - byteLength)
+      } catch (error) {
+        this.bufferedAmount = 0
+        this.options.onLog?.(
+          'Iroh send failed',
+          error instanceof Error ? error.message : String(error)
+        )
+        this.fail(1011, 'iroh_send_failed')
+      }
+    })
   }
 
   close(code?: number, reason?: string): void {
@@ -263,6 +259,7 @@ export class MobileIrohFramedSocket {
     }
     this.closed = true
     this.readyState = this.CLOSED
+    this.bufferedAmount = 0
     untrackSocket(this)
     this.unsubMessage?.remove()
     this.unsubPath?.remove()

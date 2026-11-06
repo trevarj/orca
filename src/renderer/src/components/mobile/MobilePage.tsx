@@ -190,7 +190,12 @@ export default function MobilePage(): React.JSX.Element {
     setPairingQrError,
     setPairLoading,
     setRelayMintFailure,
-    regenerate: (mode, opts) => void generatePairing(opts.rotate, undefined, mode)
+    regenerate: (mode, opts) => {
+      // Mode invalidation must wait for this visit's address, just like the initial mint.
+      if (mode === 'iroh' || pairingAddressSettled) {
+        void generatePairing(opts.rotate, undefined, mode)
+      }
+    }
   })
 
   const loadNetworkInterfaces = useCallback(async () => {
