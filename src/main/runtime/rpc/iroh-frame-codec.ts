@@ -5,6 +5,7 @@ export const IROH_MOBILE_RPC_ALPN = 'orca-mobile-rpc/1'
 export const IROH_MAX_FRAME_BYTES = 1024 * 1024
 export const IROH_LENGTH_PREFIX_BYTES = 4
 
+/** Prefix a payload with its big-endian length, rejecting frames above the wire cap. */
 export function encodeLengthPrefixedFrame(payload: Uint8Array): Buffer {
   if (payload.byteLength > IROH_MAX_FRAME_BYTES) {
     throw new Error(`iroh frame exceeds ${IROH_MAX_FRAME_BYTES} bytes`)
@@ -23,7 +24,7 @@ export type FrameDecoderCallbacks = {
   onOversize: (declaredLength: number) => void
 }
 
-// Incremental decoder for a single bi-stream. Rejects declared lengths above the cap.
+/** Decode fragmented frames with one allocation per payload; report oversized headers. */
 export function createFrameDecoder(callbacks: FrameDecoderCallbacks): {
   feed: (chunk: Uint8Array) => void
   reset: () => void
@@ -74,9 +75,7 @@ export function createFrameDecoder(callbacks: FrameDecoderCallbacks): {
   }
 }
 
-// Why: WS text frames (JSON/base64) are ASCII; sealed binary frames are
-// high-entropy, so sniffing recovers the WS text/binary flag without spending
-// a wire tag — the orca-mobile-rpc/1 frame is length + payload on purpose.
+/** Recover WS text/binary semantics: ASCII text stays text, other payloads stay binary. */
 export function decodeIrohFramePayload(payload: Uint8Array): string | Uint8Array {
   for (let i = 0; i < payload.byteLength; i++) {
     const byte = payload[i]!
@@ -87,6 +86,7 @@ export function decodeIrohFramePayload(payload: Uint8Array): string | Uint8Array
   return Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength).toString('utf8')
 }
 
+/** Encode text as UTF-8 and retain binary payload views without copying their bytes. */
 export function encodeIrohFramePayload(
   data: string | Uint8Array | Buffer,
   _binary?: boolean

@@ -79,7 +79,10 @@ export type ConnectionVerdict =
     }
   | { kind: 'auth-failed'; label: string }
 
-// Recompute staleness against now; lastConnectedAt itself is a fixed timestamp.
+/**
+ * Prioritizes authentication and explicit relay evidence over retry-based warnings.
+ * Recomputes staleness at nowMs and carries iroh diagnostics into non-connected status labels.
+ */
 export function classifyConnection(args: {
   state: ConnectionState
   reconnectAttempts: number
@@ -212,6 +215,7 @@ export function classifyConnection(args: {
   }
 }
 
+/** Retains both path hints in display order while leaving an absent hint undefined. */
 function mergeHints(a?: string, b?: string | null): string | undefined {
   if (a && b) {
     return `${a}; ${b}`
@@ -230,6 +234,7 @@ export function isConnectionDialing(verdict: ConnectionVerdict): boolean {
   return verdict.kind === 'normal' && verdict.dialing === true
 }
 
+/** Includes outage hints, but only iroh diagnostics may annotate an otherwise normal status. */
 export function verdictDisplayLabel(verdict: ConnectionVerdict): string {
   if (
     (isConnectionOutage(verdict) || verdict.kind === 'normal') &&

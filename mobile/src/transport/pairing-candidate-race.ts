@@ -39,6 +39,10 @@ export type PairingCandidateWinner = PairingCandidate & {
   status: HostStatusReply | null
 }
 
+/**
+ * Selects a non-refused status reply, preferring direct among replies received before queued selection.
+ * Closes losing clients after success and rejects when every candidate fails.
+ */
 export function racePairingCandidates(
   candidates: readonly PairingCandidate[]
 ): Promise<PairingCandidateWinner> {

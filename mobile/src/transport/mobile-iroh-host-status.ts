@@ -11,6 +11,7 @@ export type IrohHostStatus = {
 const byHost = new Map<string, IrohHostStatus>()
 const listeners = new Set<() => void>()
 
+/** Replaces the host's diagnostic snapshot and synchronously invokes status subscribers. */
 export function setIrohHostStatus(
   hostId: string,
   phase: IrohHostStatusPhase,

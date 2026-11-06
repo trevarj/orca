@@ -31,6 +31,10 @@ type MobilePairingSetupSectionProps = {
   onGenerateQr: () => void
 }
 
+/**
+ * Renders pairing setup and gates code generation on the selected mode's prerequisites.
+ * LAN requires an address; Relay makes it optional, while Iroh omits address controls.
+ */
 export function MobilePairingSetupSection({
   connectionMode,
   canGenerate = true,

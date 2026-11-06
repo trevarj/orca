@@ -1,6 +1,7 @@
 import { translate } from '../i18n/mobile-i18n'
 import type { MobileConnectionPath } from './stable-logical-rpc-client'
 
+/** Labels the selected transport without conflating native iroh with Orca Relay. */
 export function mobileConnectionPathLabel(path: MobileConnectionPath): string {
   if (path === 'relay') {
     return 'Orca Relay'
@@ -13,6 +14,7 @@ export function mobileConnectionPathLabel(path: MobileConnectionPath): string {
     : translate('connection.connectionPathLabel.directLan', 'Direct · LAN')
 }
 
+/** Uses spoken "via" wording for direct paths instead of the compact visual separator. */
 export function mobileConnectionPathAccessibilityLabel(path: MobileConnectionPath): string {
   if (path === 'relay') {
     return 'Orca Relay'

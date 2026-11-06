@@ -105,6 +105,7 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
     this.connectionCloseHandler = handler
   }
 
+  /** Mark an owned socket authenticated and cancel its pre-authentication deadline. */
   setClientId(ws: WebSocket, clientId: string): void {
     // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: Only IrohFramedSockets are registered with this transport, so every ws handed back is one.
     const socket = ws as unknown as IrohFramedSocket
@@ -115,6 +116,7 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
     }
   }
 
+  /** Terminate every authenticated socket for a revoked client and return the count. */
   terminateClientConnections(clientId: string): number {
     const targets = Array.from(this.clientIds.entries())
       .filter(([, id]) => id === clientId)
@@ -125,6 +127,7 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
     return targets.length
   }
 
+  /** Share one startup attempt; shutdown cancels the caller's wait even if native bind stalls. */
   async start(): Promise<void> {
     if (this.shutdown.signal.aborted) {
       return
@@ -138,6 +141,7 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
     return this.startPromise
   }
 
+  /** Publish dial hints only after the owned endpoint is online; dispose failed or stale binds. */
   private async startEndpoint(): Promise<void> {
     const relayUrl = parseIrohRelayUrl(this.relayUrl)
     const secretKey = loadOrCreateIrohEndpointSecret(this.userDataPath)
@@ -188,6 +192,7 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
     }
   }
 
+  /** Share one shutdown operation and prevent any later startup from publishing an endpoint. */
   stop(): Promise<void> {
     if (!this.stopPromise) {
       const stopped = Promise.withResolvers<void>()
@@ -197,6 +202,7 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
     return this.stopPromise
   }
 
+  /** Cancel startup and close all owned sockets, handshakes and the native endpoint. */
   private async stopEndpoint(): Promise<void> {
     const endpoint = this.endpoint
     this.endpoint = null
@@ -225,6 +231,7 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
     }
   }
 
+  /** Attach RPC framing and deadlines, finalizing each accepted socket only once. */
   private handleConnection(
     socket: IrohFramedSocket,
     bi: { recv: { read: (n: number) => Promise<number[]> } }
@@ -304,6 +311,7 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
     void this.readLoop(bi, decoder, socket)
   }
 
+  /** Feed native chunks until EOF or shutdown, always terminating the socket on exit. */
   private async readLoop(
     bi: { recv: { read: (n: number) => Promise<number[]> } },
     decoder: { feed: (chunk: Uint8Array) => void },

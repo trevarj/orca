@@ -27,6 +27,7 @@ import {
 } from '../../hosts/platform-probe/host-descriptor'
 
 export class RuntimeRpcLifecycle extends RuntimeRpcMobileTransportLifecycle {
+  /** Publish local RPC independently of iroh readiness, cleaning up transports if metadata fails. */
   async start(): Promise<void> {
     if (this.stopping || this.activeTransports.length > 0) {
       return
@@ -185,7 +186,7 @@ export class RuntimeRpcLifecycle extends RuntimeRpcMobileTransportLifecycle {
     })
   }
 
-  // Default to loopback unless explicitly exposed or a connected network-reach WS grant needs reconnects (STA-2370).
+  /** Keep WS loopback unless explicit exposure or a connected non-iroh network grant requires it. */
   protected resolveInitialWebSocketBindHost(): string {
     if (this.pinnedBindHost) {
       return this.pinnedBindHost

@@ -58,6 +58,10 @@ const APPEARANCE_MENU_KEYS: readonly (keyof GlobalSettings)[] = [
   'showTitlebarAppName'
 ]
 
+/**
+ * Register settings/cache IPC and forward store updates to windows other than the writer.
+ * Sanitize and normalize renderer writes before persistence and runtime side effects.
+ */
 export function registerSettingsHandlers(
   store: Store,
   agentAwakeService?: AgentAwakeService

@@ -53,6 +53,7 @@ function relayCellLabel(cellUrl: string): string | null {
   }
 }
 
+/** Presents connection modes with Relay sign-in guidance and Iroh binding availability. */
 export function MobilePairingConnectionOptions({
   value,
   onChange,
@@ -95,6 +96,7 @@ export function MobilePairingConnectionOptions({
     : value
 
   // Wrap/focus enabled radios, but leave nested Sign in controls’ arrows untouched.
+  /** Calls `onChange` and moves focus only when an enabled alternative mode is found. */
   const handleArrowKeys = (event: React.KeyboardEvent): void => {
     if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
       return

@@ -81,7 +81,7 @@ function e2eHeadlessServeWithoutBrowser(): boolean {
   )
 }
 
-/** Construct the runtime RPC server with serve-specific bind and port exposure settings. */
+/** Install desktop RPC with serve-specific binds and a relay subscription detached when RPC stops. */
 function installRuntimeRpc(
   runtime: RuntimeService,
   serveOptions: ReturnType<typeof getServeOptions> | null
