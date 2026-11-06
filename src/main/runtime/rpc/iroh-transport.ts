@@ -1,6 +1,6 @@
 // Iroh mobile transport: public-key dial + length-prefixed E2EE frames.
 // Liveness: rely on QUIC keepalive for the path; reap connections idle for 30s
-// (no inbound frames) instead of WS ping/pong via RemoteRuntimeServerHeartbeat.
+// (no authenticated read/write progress) instead of WS ping/pong via RemoteRuntimeServerHeartbeat.
 import type { Connection, Endpoint } from '@number0/iroh'
 import type { WebSocket } from 'ws'
 import { parseIrohRelayUrl } from '../../../shared/iroh-relay-preference'
@@ -14,7 +14,7 @@ import {
   IROH_PRE_AUTH_MAX_FRAME_BYTES
 } from './iroh-frame-codec'
 import { loadOrCreateIrohEndpointSecret } from './iroh-endpoint-secret'
-import { bindIrohEndpoint } from './iroh-endpoint-bind'
+import { bindIrohEndpoint, readIrohEndpointDialHints } from './iroh-endpoint-bind'
 import { runIrohAcceptLoop } from './iroh-accept-loop'
 import { IrohConnectionTimers } from './iroh-connection-timers'
 import { type IrohFramedSocket, WRITE_CHUNK_BYTES } from './iroh-framed-socket'
@@ -85,16 +85,7 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
     if (!endpoint || !this.endpointIdValue) {
       return null
     }
-    try {
-      const addr = endpoint.addr()
-      return {
-        relayUrl: addr.relayUrl() ?? null,
-        // Why: cap to keep the QR payload small; iroh ranks LAN addrs first.
-        directAddresses: addr.directAddresses().slice(0, 8)
-      }
-    } catch {
-      return null
-    }
+    return readIrohEndpointDialHints(endpoint)
   }
 
   onMessage(handler: MessageHandler): void {
@@ -114,6 +105,7 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
     if (this.sockets.has(socket)) {
       this.clientIds.set(socket, clientId)
       this.timers.clearPreAuth(socket)
+      this.refreshAuthenticatedIdle(socket)
       console.info(`[iroh-transport] authenticated clientId=${clientIdLogLabel(clientId)}`)
     }
   }
@@ -281,6 +273,7 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
     })
 
     socket.on('close', () => finalize())
+    socket.on('write-progress', () => this.refreshAuthenticatedIdle(socket))
     socket.on('error', () => {
       finalize('error')
       socket.terminate()
@@ -294,7 +287,6 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
         if (this.shutdown.signal.aborted || socket.readyState !== socket.OPEN) {
           return
         }
-        this.timers.armIdle(socket)
         const message = decodeIrohFramePayload(payload)
         this.messageHandler?.(
           message,
@@ -316,6 +308,17 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
     void this.readLoop(bi, decoder, socket)
   }
 
+  /** Only live authenticated sockets can renew their lease through native I/O progress. */
+  private refreshAuthenticatedIdle(socket: IrohFramedSocket): void {
+    if (
+      !this.shutdown.signal.aborted &&
+      socket.readyState === socket.OPEN &&
+      this.clientIds.has(socket)
+    ) {
+      this.timers.armIdle(socket)
+    }
+  }
+
   /** Feed native chunks until EOF or shutdown, always terminating the socket on exit. */
   private async readLoop(
     bi: { recv: { read: (n: number) => Promise<number[]> } },
@@ -328,6 +331,7 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
         if (this.shutdown.signal.aborted || socket.readyState !== socket.OPEN || !chunk?.length) {
           break
         }
+        this.refreshAuthenticatedIdle(socket)
         decoder.feed(Uint8Array.from(chunk))
       }
     } catch {
