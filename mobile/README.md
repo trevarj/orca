@@ -86,6 +86,12 @@ Iroh requires a native development client; Expo Go does not include `@orca/expo-
 Pairing keeps the desktop's Iroh endpoint and dial hints alongside its direct endpoint.
 Iroh uses the same encrypted mobile RPC and pairing credentials as direct connections.
 
+Desktop Iroh pairing waits up to 15 seconds for relay readiness before reporting it unavailable.
+Readiness continues in the background, and failed starts retry the selected relay with capped
+backoff rather than switching to Automatic. Retry pairing once the relay is online.
+An Iroh-only pairing does not expose the desktop WebSocket listener after restart; explicit
+network-serving settings and previously paired network WebSocket clients still can.
+
 Settings > Iroh relay controls this phone's home relay, including while offline.
 Automatic uses the default N0 relays; named regions or a custom HTTPS origin override it.
 Custom origins cannot contain credentials, paths, queries, or fragments. Draft edits apply only

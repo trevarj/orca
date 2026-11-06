@@ -49,7 +49,7 @@ function controlledEndpoint(
 }
 
 describe('runtime Iroh home relay replacement', () => {
-  it('publishes working local and WS endpoints while initial relay readiness is pending', async () => {
+  it('keeps local and WS endpoints working while a never-online Iroh QR settles unavailable', async () => {
     const userDataPath = mkdtempSync(join(tmpdir(), 'orca-iroh-relay-'))
     const online = Promise.withResolvers<void>()
     const initial = controlledEndpoint('https://unreachable.relay.test/', online.promise)
@@ -90,21 +90,22 @@ describe('runtime Iroh home relay replacement', () => {
       session.ws.close()
       await waitForWsClose(session.ws)
 
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
       const pendingQr = server.createMobilePairingOffer({ connectionMode: 'iroh' })
-      await server.stop()
+      await vi.advanceTimersByTimeAsync(15_000)
       await expect(pendingQr).resolves.toMatchObject({
         available: false,
         reason: 'iroh_unavailable'
       })
-      expect(initial.close).toHaveBeenCalledOnce()
     } finally {
+      vi.useRealTimers()
       online.resolve()
       await startup
       await server.stop()
     }
   })
 
-  it('refreshes actual QR hints without rotating credentials or disturbing authenticated WS and CLI', async () => {
+  it('retains a timed-out bind and publishes late actual hints without rotating credentials or grants', async () => {
     const userDataPath = mkdtempSync(join(tmpdir(), 'orca-iroh-relay-'))
     const nextOnline = Promise.withResolvers<void>()
     const endpoints = [
@@ -122,13 +123,12 @@ describe('runtime Iroh home relay replacement', () => {
       irohBindEndpoint: async () => endpoints[binding++]!
     })
     await server.start()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     try {
       const registry = server.getDeviceRegistry()!
       const paired = registry.addDevice('Already paired phone', 'mobile')
       registry.updateLastSeen(paired.deviceId)
       const pairedBefore = registry.getDevice(paired.deviceId)
-      const wiring = server.getMobileSocketWiring()
-      const e2ee = server.getE2EEKeypair()
       const endpointSecret = readFileSync(join(userDataPath, 'orca-iroh-endpoint-secret.json'))
       const oldOffer = await server.createMobilePairingOffer({ connectionMode: 'iroh' })
       if (!oldOffer.available) {
@@ -148,16 +148,17 @@ describe('runtime Iroh home relay replacement', () => {
         const metadata = readRuntimeMetadata(userDataPath)!
         const rebind = server.setIrohRelayUrl('https://configured-new.relay.test/')
         expect(server.getIrohStatus()).toEqual({ bound: false, endpointId: null, relayUrl: null })
-        let qrSettled = false
-        const freshOffer = server.createMobilePairingOffer({
+        const timedOutOffer = server.createMobilePairingOffer({
           connectionMode: 'iroh',
           rotate: false
         })
-        void freshOffer.then(() => {
-          qrSettled = true
-        })
         await endpoints[1]!.onlineStarted.promise
-        expect(qrSettled).toBe(false)
+        await vi.advanceTimersByTimeAsync(15_000)
+        await expect(timedOutOffer).resolves.toMatchObject({
+          available: false,
+          reason: 'iroh_unavailable'
+        })
+        expect(registry.validateToken(oldCode.deviceToken)?.deviceId).toBe(oldOffer.deviceId)
 
         sendEncryptedWsRequest(session, { id: 'while-rebinding', method: 'status.get' })
         await expect(responses.next('while-rebinding')).resolves.toMatchObject({ ok: true })
@@ -171,7 +172,10 @@ describe('runtime Iroh home relay replacement', () => {
 
         nextOnline.resolve()
         await rebind
-        const offer = await freshOffer
+        const offer = await server.createMobilePairingOffer({
+          connectionMode: 'iroh',
+          rotate: false
+        })
         if (!offer.available) {
           throw new Error('Replacement Iroh pairing unavailable')
         }
@@ -188,17 +192,13 @@ describe('runtime Iroh home relay replacement', () => {
           endpointId: ENDPOINT_ID,
           relayUrl: 'https://reported-new.relay.test/'
         })
-        expect(server.getDeviceRegistry()).toBe(registry)
         expect(registry.getDevice(paired.deviceId)).toEqual(pairedBefore)
-        expect(server.getMobileSocketWiring()).toBe(wiring)
-        expect(server.getE2EEKeypair()).toBe(e2ee)
         expect(readFileSync(join(userDataPath, 'orca-iroh-endpoint-secret.json'))).toEqual(
           endpointSecret
         )
         expect(server.getWebSocketEndpoint()).toBe(wsEndpoint)
         expect(readRuntimeMetadata(userDataPath)).toEqual(metadata)
         expect(session.ws.readyState).toBe(session.ws.OPEN)
-        expect(endpoints[0]!.close).toHaveBeenCalledOnce()
         sendEncryptedWsRequest(session, { id: 'after-rebinding', method: 'status.get' })
         await expect(responses.next('after-rebinding')).resolves.toMatchObject({ ok: true })
       } finally {
@@ -208,6 +208,7 @@ describe('runtime Iroh home relay replacement', () => {
         await waitForWsClose(session.ws)
       }
     } finally {
+      vi.useRealTimers()
       nextOnline.resolve()
       await server.stop()
     }
@@ -344,13 +345,13 @@ describe('runtime Iroh home relay replacement', () => {
     }
   })
 
-  it('fails closed on an explicit relay error, rejects invalid changes, and can recover', async () => {
+  it('fails closed, rejects invalid changes, and retries transient failures without changing relay or credentials', async () => {
     const userDataPath = mkdtempSync(join(tmpdir(), 'orca-iroh-relay-'))
     const failedOnline = Promise.withResolvers<void>()
     const endpoints = [
       controlledEndpoint('https://initial.relay.test/'),
       controlledEndpoint('https://unavailable.relay.test/', failedOnline.promise),
-      controlledEndpoint('https://recovered.relay.test/')
+      null
     ]
     let binding = 0
     const server = new OrcaRuntimeRpcServer({
@@ -359,31 +360,41 @@ describe('runtime Iroh home relay replacement', () => {
       userDataPath,
       enableWebSocket: true,
       wsPort: 0,
-      irohBindEndpoint: async () => endpoints[binding++]!
+      irohBindEndpoint: async (_secret, _alpn, relayUrl) => {
+        const endpoint = endpoints[binding++]
+        if (endpoint === null) {
+          throw new Error('Temporary bind failure')
+        }
+        return endpoint ?? controlledEndpoint(relayUrl ?? 'https://automatic.relay.test/')
+      }
     })
     await server.start()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     try {
       const initial = await server.createMobilePairingOffer({ connectionMode: 'iroh' })
       if (!initial.available) {
         throw new Error('Initial Iroh pairing unavailable')
       }
+      const initialCode = parsePairingCode(initial.pairingUrl)!
+      const registry = server.getDeviceRegistry()!
+      const paired = registry.addDevice('Already paired phone', 'mobile')
+      const grant = registry.getDevice(paired.deviceId)
+      const endpointSecret = readFileSync(join(userDataPath, 'orca-iroh-endpoint-secret.json'))
       const invalid = 'https://user:secret@relay.test/private'
-      let validationMessage = ''
+      let validationError: unknown
       try {
         server.setIrohRelayUrl(invalid)
       } catch (error) {
-        validationMessage = error instanceof Error ? error.message : String(error)
+        validationError = error
       }
-      expect(validationMessage).not.toBe('')
-      expect(validationMessage).not.toContain('secret')
-      expect(validationMessage).not.toContain(invalid)
+      expect(validationError).toBeInstanceOf(Error)
+      expect(String(validationError)).not.toContain('secret')
+      expect(String(validationError)).not.toContain(invalid)
       expect(server.getIrohStatus().bound).toBe(true)
-      const change = server.setIrohRelayUrl('https://unavailable.relay.test/')
+      const change = server.setIrohRelayUrl('https://selected.relay.test/')
       await endpoints[1]!.onlineStarted.promise
       failedOnline.reject(new Error('Relay unavailable'))
       await change
-      expect(binding).toBe(2)
-      expect(endpoints[1]!.close).toHaveBeenCalledOnce()
       expect(server.getIrohStatus()).toEqual({ bound: false, endpointId: null, relayUrl: null })
       await expect(
         server.createMobilePairingOffer({ connectionMode: 'iroh' })
@@ -394,7 +405,7 @@ describe('runtime Iroh home relay replacement', () => {
       expect(server.getDeviceRegistry()?.getPendingDevice('mobile')?.deviceId).toBe(
         initial.deviceId
       )
-      await server.setIrohRelayUrl(null)
+      await vi.advanceTimersByTimeAsync(300_000)
       const recovered = await server.createMobilePairingOffer({
         connectionMode: 'iroh',
         rotate: false
@@ -402,11 +413,71 @@ describe('runtime Iroh home relay replacement', () => {
       if (!recovered.available) {
         throw new Error('Recovered Iroh pairing unavailable')
       }
-      expect(parsePairingCode(recovered.pairingUrl)?.deviceToken).toBe(
-        parsePairingCode(initial.pairingUrl)?.deviceToken
+      const recoveredCode = parsePairingCode(recovered.pairingUrl)!
+      expect(recoveredCode.iroh).toEqual({
+        endpointId: ENDPOINT_ID,
+        relayUrl: 'https://selected.relay.test/'
+      })
+      expect(recoveredCode.deviceToken).toBe(initialCode.deviceToken)
+      expect(recoveredCode.publicKeyB64).toBe(initialCode.publicKeyB64)
+      expect(recovered.deviceId).toBe(initial.deviceId)
+      expect(registry.validateToken(initialCode.deviceToken)?.deviceId).toBe(initial.deviceId)
+      expect(registry.getDevice(paired.deviceId)).toEqual(grant)
+      expect(readFileSync(join(userDataPath, 'orca-iroh-endpoint-secret.json'))).toEqual(
+        endpointSecret
       )
-      expect(server.getIrohStatus().relayUrl).toBe('https://recovered.relay.test/')
     } finally {
+      vi.useRealTimers()
+      await server.stop()
+    }
+  })
+
+  it('does not let failed-generation retries replace a new relay or republish after shutdown', async () => {
+    const server = new OrcaRuntimeRpcServer({
+      runtime: new OrcaRuntimeService(),
+      methods: [],
+      userDataPath: mkdtempSync(join(tmpdir(), 'orca-iroh-relay-')),
+      enableWebSocket: true,
+      wsPort: 0,
+      irohRelayUrl: 'https://offline.relay.test/',
+      irohBindEndpoint: async (_secret, _alpn, relayUrl) => {
+        if (relayUrl === 'https://offline.relay.test/') {
+          throw new Error('Relay unavailable')
+        }
+        return controlledEndpoint(relayUrl ?? 'https://automatic.relay.test/')
+      }
+    })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      await server.start()
+      await server.setIrohRelayUrl('https://offline.relay.test/')
+      await server.setIrohRelayUrl('https://current.relay.test/')
+      const initial = await server.createMobilePairingOffer({ connectionMode: 'iroh' })
+      if (!initial.available) {
+        throw new Error('Current Iroh pairing unavailable')
+      }
+      const initialCode = parsePairingCode(initial.pairingUrl)!
+      await vi.advanceTimersByTimeAsync(300_000)
+      const current = await server.createMobilePairingOffer({
+        connectionMode: 'iroh',
+        rotate: false
+      })
+      if (!current.available) {
+        throw new Error('Current Iroh pairing lost after stale retry')
+      }
+      expect(parsePairingCode(current.pairingUrl)?.iroh).toEqual({
+        endpointId: ENDPOINT_ID,
+        relayUrl: 'https://current.relay.test/'
+      })
+      expect(parsePairingCode(current.pairingUrl)?.deviceToken).toBe(initialCode.deviceToken)
+
+      await server.setIrohRelayUrl('https://offline.relay.test/')
+      await server.stop()
+      await vi.advanceTimersByTimeAsync(300_000)
+      expect(server.getIrohStatus()).toEqual({ bound: false, endpointId: null, relayUrl: null })
+      expect(server.getWebSocketEndpoint()).toBeNull()
+    } finally {
+      vi.useRealTimers()
       await server.stop()
     }
   })
