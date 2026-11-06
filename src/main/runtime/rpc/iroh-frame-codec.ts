@@ -1,8 +1,19 @@
 // Length-prefixed framing for the iroh mobile transport.
-// Wire: 4-byte big-endian u32 length + payload. Max frame 1 MiB.
+// Wire: 4-byte big-endian u32 length + opaque E2EE payload.
+import {
+  REMOTE_RUNTIME_MAX_INBOUND_FRAME_BYTES,
+  REMOTE_RUNTIME_MAX_OUTBOUND_BINARY_FRAME_BYTES,
+  REMOTE_RUNTIME_MAX_OUTBOUND_JSON_BYTES
+} from '../../../shared/remote-runtime/remote-runtime-memory-limits'
 
 export const IROH_MOBILE_RPC_ALPN = 'orca-mobile-rpc/1'
-export const IROH_MAX_FRAME_BYTES = 1024 * 1024
+export const IROH_PRE_AUTH_MAX_FRAME_BYTES = REMOTE_RUNTIME_MAX_INBOUND_FRAME_BYTES
+// V2 adds a 42-byte header to v1's 24-byte nonce + 16-byte MAC; only text is base64 on wire.
+const E2EE_MAX_OVERHEAD_BYTES = 24 + 16 + 42
+export const IROH_MAX_FRAME_BYTES = Math.max(
+  Math.ceil((REMOTE_RUNTIME_MAX_OUTBOUND_JSON_BYTES + E2EE_MAX_OVERHEAD_BYTES) / 3) * 4,
+  REMOTE_RUNTIME_MAX_OUTBOUND_BINARY_FRAME_BYTES + E2EE_MAX_OVERHEAD_BYTES
+)
 export const IROH_LENGTH_PREFIX_BYTES = 4
 
 /** Prefix a payload with its big-endian length, rejecting frames above the wire cap. */
@@ -22,9 +33,10 @@ export function encodeLengthPrefixedFrame(payload: Uint8Array): Buffer {
 export type FrameDecoderCallbacks = {
   onFrame: (payload: Uint8Array) => void
   onOversize: (declaredLength: number) => void
+  maxFrameBytes?: () => number
 }
 
-/** Decode fragmented frames with one allocation per payload; report oversized headers. */
+/** Decode fragments linearly, checking the current admission cap before allocating each payload. */
 export function createFrameDecoder(callbacks: FrameDecoderCallbacks): {
   feed: (chunk: Uint8Array) => void
   reset: () => void
@@ -48,7 +60,7 @@ export function createFrameDecoder(callbacks: FrameDecoderCallbacks): {
           }
           const length = header.readUInt32BE(0)
           headerBytes = 0
-          if (length > IROH_MAX_FRAME_BYTES) {
+          if (length > (callbacks.maxFrameBytes?.() ?? IROH_MAX_FRAME_BYTES)) {
             callbacks.onOversize(length)
             return
           }

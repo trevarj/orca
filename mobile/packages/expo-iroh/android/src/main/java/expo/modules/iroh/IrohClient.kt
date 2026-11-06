@@ -217,7 +217,7 @@ internal class IrohClient(
     }
   }
 
-  /** Validate a base64 payload of at most 1 MiB and serialize its length-prefixed write. */
+  /** Decode bridge base64 before applying the raw wire cap and serializing the framed write. */
   suspend fun send(id: String, base64: String) {
     val live = live(id)
     require(base64.length <= ((IrohFraming.MAX_PAYLOAD + 2) / 3) * 4) { "iroh_frame_too_large" }
