@@ -21,6 +21,7 @@ import {
 
 // How long an automatic mint waits for an on-demand Relay install before reporting it missing.
 const RELAY_PROVIDER_INSTALL_WAIT_MS = 15_000
+const IROH_RELAY_BIND_WAIT_MS = 15_000
 
 export class RuntimeRpcMobilePairing extends RuntimeRpcPairing {
   async createMobilePairingOffer(args: {
@@ -96,7 +97,8 @@ export class RuntimeRpcMobilePairing extends RuntimeRpcPairing {
     // Renderer input is untrusted; only known modes may suppress Relay provisioning.
     const connectionMode = parseMobilePairingConnectionMode(args.connectionMode)
     if (connectionMode === 'iroh') {
-      await this.waitForIrohRelayBinding()
+      // Bound the request, not native readiness: a late online endpoint can serve the next QR.
+      await withTimeout(this.waitForIrohRelayBinding(), IROH_RELAY_BIND_WAIT_MS, undefined)
       if (generation !== this.mobilePairingOfferGeneration) {
         return this.relayPairingRequestSuperseded()
       }

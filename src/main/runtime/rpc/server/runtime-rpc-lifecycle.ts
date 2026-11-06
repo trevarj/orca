@@ -148,6 +148,7 @@ export class RuntimeRpcLifecycle extends RuntimeRpcMobileTransportLifecycle {
     } catch (error) {
       // Without metadata CLI cannot discover runtime; close transports rather than serve invisibly.
       this.stopping = true
+      this.irohRelayRetry.cancel()
       await this.pendingIrohTransport?.stop().catch(() => {})
       await this.waitForIrohRelayBinding()
       const transports = this.activeTransports
@@ -177,7 +178,7 @@ export class RuntimeRpcLifecycle extends RuntimeRpcMobileTransportLifecycle {
     })
   }
 
-  // Default to loopback until explicit network pairing or a connected network-reach grant; local-only browser grants must never trigger reconnect exposure (STA-2370).
+  // Default to loopback unless explicitly exposed or a connected network-reach WS grant needs reconnects (STA-2370).
   protected resolveInitialWebSocketBindHost(): string {
     if (this.pinnedBindHost) {
       return this.pinnedBindHost
@@ -188,7 +189,12 @@ export class RuntimeRpcLifecycle extends RuntimeRpcMobileTransportLifecycle {
     const hasConnectedNetworkDevice =
       this.deviceRegistry
         ?.listDevices()
-        .some((device) => device.lastSeenAt > 0 && device.pairingReach !== 'this-computer') ?? false
+        .some(
+          (device) =>
+            device.lastSeenAt > 0 &&
+            device.pairingReach !== 'this-computer' &&
+            !(device.scope === 'mobile' && device.mobilePairingConnectionMode === 'iroh')
+        ) ?? false
     return hasConnectedNetworkDevice ? WS_BIND_HOST_ALL_INTERFACES : WS_BIND_HOST_LOOPBACK
   }
 
