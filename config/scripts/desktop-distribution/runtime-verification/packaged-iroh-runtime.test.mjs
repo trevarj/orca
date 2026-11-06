@@ -18,6 +18,7 @@ import {
   IROH_BUILD_IDENTITY,
   IROH_PREBUILD_FILES
 } from '../../orcad-distribution/prebuilds/iroh-prebuild.mjs'
+import { ensureLinuxIrohPrebuild } from '../../orcad-distribution/prebuilds/ensure-linux-iroh-prebuild.mjs'
 import { copyScriptWithLocalModules } from '../../test-fixtures/script-copy-closure/script-module-dependencies.mjs'
 
 const require = createRequire(import.meta.url)
@@ -139,6 +140,86 @@ async function stagingFixture(arch, { installedNative = false } = {}) {
     registryFetch
   }
 }
+
+it.each(['x64', 'arm64'])(
+  'accepts a verified GNU %s cache for foreign-host packaging without fetching build inputs',
+  async (arch) => {
+    const f = await stagingFixture(arch)
+    await ensureLinuxIrohPrebuild({
+      arch,
+      root: join(f.root, 'source'),
+      prebuildsDir: f.prebuildsDir,
+      platform: 'darwin',
+      hostArch: arch
+    })
+    await stagePackagedIrohNative(f.resourcesDir, 'linux', arch, f.prebuildsDir)
+    expect(await readFile(join(f.nativeDir, f.nativeName))).toEqual(f.bytes)
+    expect(f.registryFetch).not.toHaveBeenCalled()
+  }
+)
+
+it.each(['missing', 'stale', 'corrupt'])(
+  'refuses %s foreign-host build inputs even when the npm native is installed',
+  async (damage) => {
+    const f = await stagingFixture('arm64', { installedNative: true })
+    if (damage === 'missing') {
+      await rm(f.prebuildsDir, { recursive: true })
+    } else if (damage === 'stale') {
+      f.entry.iroh.sourceRevision = 'stale'
+      await f.writeManifest()
+    } else {
+      await writeFile(f.artifact, nativeBytes('arm64', 'tampered cache'))
+    }
+    await expect(
+      ensureLinuxIrohPrebuild({
+        arch: 'arm64',
+        root: join(f.root, 'source'),
+        prebuildsDir: f.prebuildsDir,
+        platform: 'linux',
+        hostArch: 'x64'
+      })
+    ).rejects.toThrow(/linux-arm64-glibc.*native Linux arm64 runner/)
+    expect(await readFile(join(f.sourceNative, f.nativeName))).toEqual(f.installedBytes)
+    expect(f.registryFetch).not.toHaveBeenCalled()
+  }
+)
+
+it('refuses an invalid custom prebuild directory instead of producing into a different cache', async () => {
+  const f = await stagingFixture('x64')
+  await rm(f.artifact)
+  await expect(
+    ensureLinuxIrohPrebuild({
+      arch: 'x64',
+      root: join(f.root, 'source'),
+      prebuildsDir: f.prebuildsDir,
+      platform: 'linux',
+      hostArch: 'x64'
+    })
+  ).rejects.toThrow(/ORCAD_PREBUILDS_DIR.*linux-x64-glibc/)
+  await expect(readFile(f.artifact)).rejects.toThrow(/ENOENT/)
+  expect(f.registryFetch).not.toHaveBeenCalled()
+})
+
+it('requires Docker to provision a missing native-host cache before staging can proceed', async () => {
+  const f = await stagingFixture('x64', { installedNative: true })
+  const root = join(f.root, 'source')
+  const prebuildsDir = join(root, 'out', 'orcad-prebuilds')
+  await expect(
+    ensureLinuxIrohPrebuild({
+      arch: 'x64',
+      root,
+      prebuildsDir,
+      platform: 'linux',
+      hostArch: 'x64',
+      run: () => ({ error: new Error('Docker is not installed') })
+    })
+  ).rejects.toThrow(/linux-x64-glibc.*requires working Docker/)
+  await expect(
+    stagePackagedIrohNative(f.resourcesDir, 'linux', 'x64', prebuildsDir)
+  ).rejects.toThrow(/missing.*identity/)
+  expect(await readFile(join(f.nativeDir, f.nativeName))).toEqual(f.installedBytes)
+  expect(f.registryFetch).not.toHaveBeenCalled()
+})
 
 it.each([
   ['x64', 'x64'],

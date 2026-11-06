@@ -1,8 +1,17 @@
 # @orca/expo-iroh usage
 
 Dumb byte-message pipe over Iroh. JS supplies opaque E2EE frames; native only
-frames them (4-byte big-endian u32 length + payload, max 1 MiB) on a single
-long-lived bi-stream per connection.
+frames them (4-byte big-endian u32 length + payload) on a single long-lived
+bi-stream per connection.
+
+The bounded wire payload cap is **8,388,690 bytes**: the larger of an 8 MiB
+binary RPC frame plus 82 E2EEv2 bytes, or base64 of a 4 MiB JSON reply plus
+82 bytes (5,592,516 bytes). E2EEv1 adds only 40 bytes (24-byte nonce + 16-byte
+MAC); v2 also authenticates a 42-byte header. Text is base64 on the wire;
+binary is not. Expo's bridge base64 is decoded before framing and does not
+inflate this wire cap. The desktop keeps its **1 MiB pre-authentication**
+payload cap until E2EE authenticates the socket; its 128-connection admission
+limit and authentication deadline are unchanged.
 
 **ALPN:** `orca-mobile-rpc/1`  
 **Platforms:** iOS (IrohLib 1.1.0) and Android (official iroh-android 1.2.0 AAR).
