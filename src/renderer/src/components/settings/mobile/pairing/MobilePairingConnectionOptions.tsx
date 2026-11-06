@@ -311,7 +311,7 @@ export function MobilePairingConnectionOptions({
                 )
               : translate(
                   'auto.components.settings.MobilePairingConnectionOptions.irohDescription',
-                  'Phone can be on cellular or any Wi‑Fi. No sign-in, no address setup. Direct P2P (hole-punched) with public relay fallback.'
+                  'Phone can be on cellular or any Wi‑Fi. No sign-in, no address setup. Direct P2P (hole-punched) with configured home-relay fallback.'
                 )
           }
           trailing={

@@ -37,3 +37,19 @@ export async function bindIrohEndpoint(
     relayUrl ? sdk.RelayMode.customFromUrls([relayUrl]) : undefined
   )
 }
+
+/** Read bounded pairing hints, returning null if the native endpoint is unavailable. */
+export function readIrohEndpointDialHints(
+  endpoint: Endpoint
+): { relayUrl: string | null; directAddresses: string[] } | null {
+  try {
+    const addr = endpoint.addr()
+    return {
+      relayUrl: addr.relayUrl() ?? null,
+      // Why: cap to keep the QR payload small; iroh ranks LAN addrs first.
+      directAddresses: addr.directAddresses().slice(0, 8)
+    }
+  } catch {
+    return null
+  }
+}

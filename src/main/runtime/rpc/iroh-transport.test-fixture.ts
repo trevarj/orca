@@ -33,10 +33,10 @@ export class FakeRecv {
 
 /** Capture actual framed socket writes without implementing the framing or encryption. */
 export class FakeSend {
-  constructor(private readonly onWrite?: (chunk: Uint8Array) => void) {}
+  constructor(private readonly onWrite?: (chunk: Uint8Array) => void | Promise<void>) {}
 
   async writeAll(buf: number[]): Promise<void> {
-    this.onWrite?.(Uint8Array.from(buf))
+    await this.onWrite?.(Uint8Array.from(buf))
   }
 }
 

@@ -114,6 +114,11 @@ reachable, not that peer traffic or Orca's E2EE handshake succeeds.
 `path_changed` for the active relay/direct path. An E2EE timeout after
 `irohConnect_ok` is a later failure than a native connection timeout.
 
+After authentication, the desktop idle lease tracks nonempty native reads
+(including partial frames) and completed native write chunks. Queued or blocked
+writes do not renew it. Unauthenticated traffic never extends the fixed
+pre-authentication deadline.
+
 | Symptom                                                     | Check                                                                                                                                                                                                                                                          |
 | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Pairing dials `ws://…` instead of iroh                      | The QR was not an Iroh-mode offer — re-generate with the Iroh option selected (and desktop must not run with `ORCA_DISABLE_IROH=1`)                                                                                                                            |
@@ -142,8 +147,9 @@ a phone's pairing profile is separate from the phone's home relay. If that old
 hint is blocked, rescan the refreshed desktop Iroh QR.
 
 Direct/LAN paths remain enabled; choosing a relay does not guarantee reachability
-or change certificate checks or E2EE. See
-[Iroh relay selection](../../../.github/CONTRIBUTING.md#iroh-relay-selection).
+or change certificate checks or E2EE. Automatic uses the SDK's default relays;
+a selected region or custom origin replaces them rather than adding public-relay
+fallbacks. See [Phone relay settings](../../README.md#iroh-transport-and-phone-relay).
 
 ## Notes
 
