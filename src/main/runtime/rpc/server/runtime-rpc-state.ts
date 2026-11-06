@@ -15,6 +15,7 @@ import type { MobileSocketWiring } from '../mobile-socket-wiring'
 import type { MobileDesktopRelay } from '../../mobile-desktop-relay/mobile-desktop-relay'
 import type { MobileRelayHostCatalog } from '../../mobile-desktop-relay/mobile-relay-host-catalog'
 import { RelayRevokeOutbox } from '../../mobile-cloud-relay/relay-revoke-outbox'
+import { RelayRetrySchedule } from '../../mobile-cloud-relay/relay-retry-schedule'
 import { PushUnregisterOutbox } from '../../push/push-unregister-outbox'
 import { RuntimeBinaryMessageRouter } from '../../runtime-binary-message-router'
 
@@ -65,6 +66,7 @@ export class RuntimeRpcState {
   protected irohRelayGeneration = 0
   protected appliedIrohRelayGeneration = -1
   protected irohRebindPromise: Promise<void> | null = null
+  protected readonly irohRelayRetry = new RelayRetrySchedule()
   protected irohRuntimeStarted = false
   protected onStop: (() => void) | null
   // Track actual WS bind host for pairing exposure transitions (STA-2370).

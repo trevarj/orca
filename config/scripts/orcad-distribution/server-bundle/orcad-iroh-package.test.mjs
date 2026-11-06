@@ -1,7 +1,9 @@
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { afterEach, expect, it } from 'vitest'
+import { c as createTar } from 'tar'
+import { afterEach, expect, it, vi } from 'vitest'
 import { COMPAT_SERVER_TARGETS, SERVER_TARGETS } from '../../../../src/shared/node-runtime-pin.ts'
 import {
   ORCAD_IROH_DIR,
@@ -15,15 +17,18 @@ import { computeOrcadFullVersion } from './orcad-artifact-version.mjs'
 import { stageOrcadIroh } from './orcad-iroh-package.mjs'
 
 const roots = []
-afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })))
+afterEach(() => {
+  vi.unstubAllGlobals()
+  roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true }))
+})
 
-function fixture() {
+function fixture({ installedNative = true } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'orcad-iroh-'))
   roots.push(root)
   const source = join(root, ORCAD_IROH_DIR)
   // Resolve the optional dependency from Iroh, as with pnpm's isolated package layout.
   const native = join(source, 'node_modules/@number0/iroh-linux-x64-gnu')
-  mkdirSync(join(native, 'native'), { recursive: true })
+  mkdirSync(source, { recursive: true })
   const metadata = {
     name: '@number0/iroh',
     version: '1.1.0',
@@ -38,17 +43,50 @@ function fixture() {
     "const binding = require('./iroh.linux-x64-gnu.node');\n" +
       'module.exports = binding;\nmodule.exports.Endpoint = binding.Endpoint;\n'
   )
-  writeFileSync(join(native, 'package.json'), JSON.stringify({ main: 'native/declared.node' }))
-  writeFileSync(
-    join(native, 'native/declared.node'),
-    Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0, 0xff])
-  )
+  if (installedNative) {
+    mkdirSync(join(native, 'native'), { recursive: true })
+    writeFileSync(join(native, 'package.json'), JSON.stringify({ main: 'native/declared.node' }))
+    writeFileSync(
+      join(native, 'native/declared.node'),
+      Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0, 0xff])
+    )
+  }
   return { root, source, native, output: join(root, 'output'), metadata }
 }
 
-it('stages the unchanged loader and declared native main beside normalized package metadata', () => {
+async function pinnedNativeArchive(root) {
+  const registry = join(root, 'registry')
+  const directory = join(registry, 'package')
+  mkdirSync(directory, { recursive: true })
+  writeFileSync(
+    join(directory, 'iroh.linux-x64-gnu.node'),
+    Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0, 0xff])
+  )
+  writeFileSync(join(directory, 'iroh.darwin-arm64.node'), 'foreign native binary')
+  writeFileSync(
+    join(directory, 'package.json'),
+    JSON.stringify({
+      name: '@number0/iroh-linux-x64-gnu',
+      version: '1.1.0',
+      main: 'iroh.linux-x64-gnu.node'
+    })
+  )
+  const archive = join(registry, 'package.tgz')
+  await createTar({ file: archive, gzip: true, cwd: registry }, ['package'])
+  const bytes = readFileSync(archive)
+  const integrity = `sha512-${createHash('sha512').update(bytes).digest('base64')}`
+  writeFileSync(
+    join(root, 'pnpm-lock.yaml'),
+    `lockfileVersion: '9.0'\n---\npackages:\n` +
+      `  '@number0/iroh-linux-x64-gnu@1.1.0':\n` +
+      `    resolution:\n      integrity: ${integrity}\n`
+  )
+  return bytes
+}
+
+it('stages the unchanged loader and declared native main beside normalized package metadata', async () => {
   const { root, source, native, output, metadata } = fixture()
-  stageOrcadIroh(root, output, 'linux-x64-glibc')
+  await stageOrcadIroh(root, output, 'linux-x64-glibc')
   const staged = join(output, ORCAD_IROH_DIR)
   expect(readFileSync(join(staged, 'index.js'))).toEqual(readFileSync(join(source, 'index.js')))
   expect(readFileSync(join(staged, 'iroh.linux-x64-gnu.node'))).toEqual(
@@ -62,32 +100,81 @@ it('stages the unchanged loader and declared native main beside normalized packa
   expect(existsSync(join(output, 'node_modules/@number0/iroh-linux-x64-gnu'))).toBe(false)
 })
 
+it('stages a lockfile-verified Linux native artifact without an installed target package', async () => {
+  const { root, source, output } = fixture({ installedNative: false })
+  const archive = await pinnedNativeArchive(root)
+  vi.stubGlobal('fetch', async (url) => {
+    expect(url).toBe(
+      'https://registry.npmjs.org/@number0/iroh-linux-x64-gnu/-/iroh-linux-x64-gnu-1.1.0.tgz'
+    )
+    return new Response(archive)
+  })
+
+  await stageOrcadIroh(root, output, 'linux-x64-glibc')
+
+  const staged = join(output, ORCAD_IROH_DIR)
+  expect(readFileSync(join(staged, 'iroh.linux-x64-gnu.node'))).toEqual(
+    Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0, 0xff])
+  )
+  expect(existsSync(join(source, 'node_modules'))).toBe(false)
+  expect(existsSync(join(staged, 'iroh.darwin-arm64.node'))).toBe(false)
+  expect(
+    existsSync(
+      join(
+        root,
+        'out/.orcad-native-packages/@number0/iroh-linux-x64-gnu/1.1.0/package/package.json'
+      )
+    )
+  ).toBe(false)
+
+  vi.stubGlobal('fetch', async () => {
+    throw new Error('The registry is offline')
+  })
+  const cachedOutput = join(root, 'cached-output')
+  await stageOrcadIroh(root, cachedOutput, 'linux-x64-glibc')
+  expect(readFileSync(join(cachedOutput, ORCAD_IROH_DIR, 'iroh.linux-x64-gnu.node'))).toEqual(
+    Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0, 0xff])
+  )
+})
+
+it('rejects a downloaded target package that does not match the lockfile checksum', async () => {
+  const { root, output } = fixture({ installedNative: false })
+  const archive = await pinnedNativeArchive(root)
+  archive[10] ^= 0xff
+  vi.stubGlobal('fetch', async () => new Response(archive))
+  await expect(stageOrcadIroh(root, output, 'linux-x64-glibc')).rejects.toThrow(
+    'does not match the lockfile integrity'
+  )
+  expect(existsSync(output)).toBe(false)
+})
+
 it.each([
   'package.json',
   'index.js',
-  'node_modules/@number0/iroh-linux-x64-gnu/package.json',
   'node_modules/@number0/iroh-linux-x64-gnu/native/declared.node'
-])('fails clearly when installed Iroh is missing %s', (missing) => {
+])('fails clearly when installed Iroh is missing %s', async (missing) => {
   const { root, source, output } = fixture()
   rmSync(join(source, missing))
-  expect(() => stageOrcadIroh(root, output, 'linux-x64-glibc')).toThrow(
+  await expect(stageOrcadIroh(root, output, 'linux-x64-glibc')).rejects.toThrow(
     /Cannot stage Orcad linux-x64-glibc Iroh.*@number0\/iroh-linux-x64-gnu/
   )
 })
 
-it('rejects a native package without a declared main', () => {
+it('rejects a native package without a declared main', async () => {
   const { root, native, output } = fixture()
   writeFileSync(join(native, 'package.json'), '{}')
-  expect(() => stageOrcadIroh(root, output, 'linux-x64-glibc')).toThrow('declares no native main')
+  await expect(stageOrcadIroh(root, output, 'linux-x64-glibc')).rejects.toThrow(
+    'declares no native main'
+  )
 })
 
 it.each(
   [...SERVER_TARGETS, ...COMPAT_SERVER_TARGETS].filter((target) => target !== 'linux-x64-glibc')
-)('leaves %s builds independent of installed Iroh packages', (target) => {
+)('leaves %s builds independent of installed Iroh packages', async (target) => {
   const root = mkdtempSync(join(tmpdir(), 'orcad-no-iroh-'))
   roots.push(root)
   const output = join(root, 'output')
-  stageOrcadIroh(root, output, target)
+  await stageOrcadIroh(root, output, target)
   expect(existsSync(output)).toBe(false)
 })
 

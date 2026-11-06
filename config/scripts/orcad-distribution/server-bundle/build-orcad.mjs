@@ -31,7 +31,7 @@ import process from 'node:process'
 import { smokeProfileStateWorkers } from './profile-state-worker-smoke.mjs'
 import { smokeForeignSqliteReaderWorker } from './foreign-sqlite-reader-worker-smoke.mjs'
 import { smokeSessionScannerService } from './session-scanner-service-smoke.mjs'
-import { materializeWatcherPackage } from './orcad-watcher-package.mjs'
+import { materializeNativePackage } from './orcad-native-package.mjs'
 import { stageOrcadWindowsProcessTree } from './orcad-windows-process-tree.mjs'
 import { stageOrcadWindowsCliLauncher } from './orcad-windows-cli-launcher.mjs'
 import { stageOrcadWindowsSecurity } from './orcad-windows-security.mjs'
@@ -105,7 +105,13 @@ async function stageParcelWatcher(target) {
   const requireFromWatcher = createRequire(
     join(ROOT, 'node_modules', '@parcel', 'watcher', 'index.js')
   )
-  const nativeSource = await materializeWatcherPackage(target)
+  const { version } = requireFromWatcher('@parcel/watcher/package.json')
+  const nativeSource = await materializeNativePackage({
+    root: ROOT,
+    name: `@parcel/watcher-${target}`,
+    version,
+    filename: 'watcher.node'
+  })
   const wrapperSource = requireFromWatcher.resolve('@parcel/watcher/wrapper.js')
   mkdirSync(WATCHER_MODULE_DIR, { recursive: true })
   await build({
@@ -185,7 +191,7 @@ copyFileSync(
   emojiDatasetOutput
 )
 await stageOrcadLinearSdk(ROOT, OUT_DIR)
-stageOrcadIroh(ROOT, OUT_DIR, BUILD_TARGET)
+await stageOrcadIroh(ROOT, OUT_DIR, BUILD_TARGET)
 // The desktop template omits it: ~10 MB per target, and orcad already treats it as optional.
 if (existsSync(AGENT_BROWSER_SOURCE) && process.env.ORCAD_OMIT_AGENT_BROWSER !== '1') {
   copyFileSync(AGENT_BROWSER_SOURCE, AGENT_BROWSER_OUTPUT)
