@@ -23,6 +23,8 @@ export class RuntimeRpcMobileTransportLifecycle extends RuntimeRpcWebSocketDispa
       // Settings listeners are synchronous: fence stale status and pairing before save acknowledges.
       this.desiredIrohRelayUrl = relayUrl
       this.irohRelayGeneration += 1
+      this.irohRelayRetry.cancel()
+      this.irohRelayRetry.reset()
       void this.pendingIrohTransport?.stop().catch(() => {})
     }
     if (!this.irohRuntimeStarted || this.stopping) {
@@ -33,12 +35,20 @@ export class RuntimeRpcMobileTransportLifecycle extends RuntimeRpcWebSocketDispa
 
   protected ensureIrohRelayBinding(): Promise<void> {
     if (!this.irohRebindPromise) {
-      if (this.stopping || this.appliedIrohRelayGeneration === this.irohRelayGeneration) {
+      if (
+        this.stopping ||
+        this.irohRelayRetry.pending ||
+        this.appliedIrohRelayGeneration === this.irohRelayGeneration
+      ) {
         return Promise.resolve()
       }
       this.irohRebindPromise = this.rebindIrohTransport().finally(() => {
         this.irohRebindPromise = null
-        if (!this.stopping && this.appliedIrohRelayGeneration !== this.irohRelayGeneration) {
+        if (
+          !this.stopping &&
+          !this.irohRelayRetry.pending &&
+          this.appliedIrohRelayGeneration !== this.irohRelayGeneration
+        ) {
           return this.ensureIrohRelayBinding()
         }
         return undefined
@@ -92,14 +102,25 @@ export class RuntimeRpcMobileTransportLifecycle extends RuntimeRpcWebSocketDispa
         this.irohTransport = transport
         // Iroh is mobile-only, not advertised in CLI bootstrap metadata.
         this.activeTransports.push(transport)
+        this.appliedIrohRelayGeneration = generation
+        this.irohRelayRetry.reset()
       } catch {
         console.error('[runtime] Failed to bind the selected Iroh relay')
         await transport.stop().catch(() => {})
+        if (!this.stopping && generation === this.irohRelayGeneration) {
+          this.irohRelayRetry.schedule(1_000, () => {
+            if (!this.stopping && generation === this.irohRelayGeneration) {
+              void this.ensureIrohRelayBinding().catch(() => {
+                console.error('[runtime] Failed to retry the selected Iroh relay')
+              })
+            }
+          })
+          return
+        }
       } finally {
         if (this.pendingIrohTransport === transport) {
           this.pendingIrohTransport = null
         }
-        this.appliedIrohRelayGeneration = generation
       }
     }
   }

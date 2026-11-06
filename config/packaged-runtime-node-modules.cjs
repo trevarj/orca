@@ -211,7 +211,7 @@ function collectPackagedRuntimePackages(electronPlatformName = process.platform)
     const napiRootPackage = JSON.parse(readFileSync(join(napiRootDir, 'package.json'), 'utf8'))
     for (const optionalName of Object.keys(napiRootPackage.optionalDependencies ?? {})) {
       try {
-        visit(optionalName)
+        visit(optionalName, napiRootDir)
       } catch {
         // Optional platform subpackage is not installed for this build; skip it.
       }

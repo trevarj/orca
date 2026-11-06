@@ -92,6 +92,7 @@ describe('MobileIrohFramedSocket', () => {
     irohStart.mockReset().mockResolvedValue({ endpointId: 'b'.repeat(64) })
     irohConnect.mockReset().mockResolvedValue({ connectionId: 'conn-1' })
     irohStop.mockReset().mockResolvedValue()
+    irohSend.mockReset().mockResolvedValue()
   })
 
   afterEach(() => {
@@ -282,8 +283,6 @@ describe('MobileIrohFramedSocket', () => {
     await Promise.resolve()
     expect(socket.readyState).toBe(socket.OPEN)
     expect(irohStop).not.toHaveBeenCalled()
-    socket.send('before-save')
-    expect(irohSend).toHaveBeenCalledWith('conn-1', btoa('before-save'))
 
     written.resolve()
     await saving
@@ -307,8 +306,6 @@ describe('MobileIrohFramedSocket', () => {
     expect(socket.readyState).toBe(socket.OPEN)
     expect(onclose).not.toHaveBeenCalled()
     expect(irohStop).not.toHaveBeenCalled()
-    socket.send('still-routed')
-    expect(irohSend).toHaveBeenCalledWith('conn-1', btoa('still-routed'))
     await openSocket()
     expect(irohStart).toHaveBeenLastCalledWith(null)
   })
@@ -382,25 +379,61 @@ describe('MobileIrohFramedSocket', () => {
     expect(irohStop).not.toHaveBeenCalled()
   })
 
-  it('base64-encodes sends and drops them once closed', async () => {
+  it('drops queued writes when closed while a native send is pending', async () => {
     const socket = await openSocket()
+    const started = Promise.withResolvers<void>()
+    const sent = Promise.withResolvers<void>()
+    const received: string[] = []
+    irohSend.mockImplementation(async (_connectionId, b64) => {
+      received.push(atob(b64))
+    })
+    irohSend.mockImplementationOnce(async (_connectionId, b64) => {
+      started.resolve()
+      await sent.promise
+      received.push(atob(b64))
+    })
 
-    socket.send('hello')
-    expect(irohSend).toHaveBeenCalledWith('conn-1', btoa('hello'))
-
+    socket.send('first')
+    await started.promise
+    socket.send('queued')
     socket.close()
-    irohSend.mockClear()
     socket.send('after-close')
-    expect(irohSend).not.toHaveBeenCalled()
+    expect(socket.bufferedAmount).toBe(0)
+    sent.resolve()
+
+    await vi.waitFor(() => expect(received).toEqual(['first']))
+    expect(socket.bufferedAmount).toBe(0)
   })
 
-  it('round-trips a payload larger than one base64 chunk', async () => {
+  it('reports a failed native send and discards later queued frames', async () => {
     const socket = await openSocket()
-    const big = new Uint8Array(0x8000 + 17).fill(0x41)
+    const started = Promise.withResolvers<void>()
+    const sent = Promise.withResolvers<void>()
+    const received: string[] = []
+    const onclose = vi.fn()
+    const onerror = vi.fn()
+    socket.onclose = onclose
+    socket.onerror = onerror
+    irohSend.mockImplementation(async (_connectionId, b64) => {
+      received.push(atob(b64))
+    })
+    irohSend.mockImplementationOnce(async () => {
+      started.resolve()
+      await sent.promise
+      throw new Error('write failed')
+    })
 
-    socket.send(big)
+    socket.send('first')
+    await started.promise
+    socket.send('queued')
+    sent.resolve()
 
-    const [, b64] = irohSend.mock.calls[0] ?? ['', '']
-    expect(atob(b64)).toHaveLength(big.byteLength)
+    await vi.waitFor(() =>
+      expect(onclose).toHaveBeenCalledWith({ code: 1011, reason: 'iroh_send_failed' })
+    )
+    expect(onerror).toHaveBeenCalledOnce()
+    expect(socket.readyState).toBe(socket.CLOSED)
+    expect(socket.bufferedAmount).toBe(0)
+    expect(received).toEqual([])
   })
 })

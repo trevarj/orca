@@ -1,5 +1,9 @@
 import nacl from 'tweetnacl'
 import { afterEach, expect, it, vi } from 'vitest'
+import {
+  BrowserScreencastOpcode,
+  encodeBrowserScreencastFrame
+} from '../../../src/shared/browser-screencast-protocol'
 import { DesktopMobileE2EEV2Session } from '../../../src/main/runtime/rpc/mobile-e2ee-v2-desktop-session'
 import { loadIrohHomeRelayUrl, saveIrohHomeRelayUrl } from '../storage/preferences'
 import {
@@ -94,7 +98,10 @@ class DesktopPeer {
     const request: RpcRequest & { params: { subscriptionId: string } } = JSON.parse(plaintext!)
     expect(request.deviceToken).toBe(this.identity.profile.deviceToken)
     this.requests.push(request)
-    if (request.method === 'runtime.clientEvents.subscribe') {
+    if (
+      request.method === 'runtime.clientEvents.subscribe' ||
+      request.method === 'browser.screencast'
+    ) {
       const subscriptionId = `${this.identity.profile.id}-${this.streams.size + 1}`
       this.streams.set(subscriptionId, request.id)
       this.seal({
@@ -153,6 +160,7 @@ const messageListeners = new Set<(event: { connectionId: string; bytesBase64: st
 const closedListeners = new Set<(event: { connectionId: string; reason: string }) => void>()
 let boundHomeRelayUrl: string | null = null
 let nextConnectionId = 0
+let nativeSendGate: { entered: () => void; wait: Promise<void> } | null = null
 const native = {
   irohStart: async (homeRelayUrl: string | null) => {
     boundHomeRelayUrl = homeRelayUrl
@@ -179,6 +187,12 @@ const native = {
     return { connectionId }
   },
   irohSend: async (connectionId: string, bytesBase64: string) => {
+    const gate = nativeSendGate
+    nativeSendGate = null
+    if (gate) {
+      gate.entered()
+      await gate.wait
+    }
     nativePeers.get(connectionId)!.receive(Buffer.from(bytesBase64, 'base64').toString('utf8'))
   },
   irohClose: async (connectionId: string) => {
@@ -275,6 +289,11 @@ afterEach(() => {
   for (const client of clients) {
     client.close()
   }
+  clients.length = 0
+  nativeIdentities.clear()
+  nativePeers.clear()
+  nativeSendGate = null
+  storage.clear()
   vi.unstubAllGlobals()
   vi.useRealTimers()
 })
@@ -434,4 +453,97 @@ it('durably saves the phone relay, reconnects both Iroh facades with authenticat
     relayWriteGate = null
     await save
   }
+})
+
+it('delivers encrypted RPC bursts in issue order while a native send is pending and receives native binary screencast frames', async () => {
+  vi.useFakeTimers()
+  vi.stubGlobal('WebSocket', WireSocket)
+  const keys = nacl.box.keyPair()
+  const identity: Identity = {
+    secretKey: keys.secretKey,
+    profile: {
+      id: 'ordered-host',
+      name: 'Ordered desktop',
+      endpoint: 'ws://ordered.invalid',
+      deviceToken: 'ordered-device',
+      publicKeyB64: Buffer.from(keys.publicKey).toString('base64'),
+      lastConnected: 1,
+      iroh: {
+        endpointId: '5'.repeat(64),
+        relayUrl: 'https://desktop.relay.invalid/',
+        directAddresses: []
+      }
+    }
+  }
+  const target = identity.profile.iroh!
+  nativeIdentities.set(target.endpointId, identity)
+  const client = openIrohRpcClient({
+    desktopEndpointId: target.endpointId,
+    dialHints: { relayUrl: target.relayUrl, directAddresses: target.directAddresses },
+    deviceToken: identity.profile.deviceToken,
+    publicKeyB64: identity.profile.publicKeyB64
+  })
+  expect(client).not.toBeNull()
+  clients.push(client!)
+  await vi.advanceTimersByTimeAsync(0)
+  expect(client!.getState()).toBe('connected')
+  const [connectionId, host] = [...nativePeers].find(([, peer]) => peer.identity === identity)!
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  nativeSendGate = { entered: entered.resolve, wait: release.promise }
+  const first = client!.sendRequest('status.get', { payload: 'x'.repeat(40 * 1024) })
+  try {
+    await entered.promise
+    const replies = Promise.allSettled([
+      first,
+      client!.sendRequest('worktree.ps', { limit: 1 }),
+      client!.sendRequest('worktree.create', { name: 'ordered' })
+    ])
+    await vi.advanceTimersByTimeAsync(0)
+    release.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(host.requests.map((request) => request.method)).toEqual([
+      'runtime.clientCapabilities.update',
+      'status.get',
+      'worktree.ps',
+      'worktree.create'
+    ])
+    expect(host.requests[1]!.params).toEqual({ payload: 'x'.repeat(40 * 1024) })
+    const responses = await replies
+    expect(
+      responses.map(
+        (response) => response.status === 'fulfilled' && response.value.ok && response.value.result
+      )
+    ).toEqual([
+      { path: 'iroh', homeRelayUrl: null },
+      { path: 'iroh', homeRelayUrl: null },
+      { path: 'iroh', homeRelayUrl: null }
+    ])
+  } finally {
+    release.resolve()
+  }
+
+  const onBinaryFrame = vi.fn()
+  client!.subscribe('browser.screencast', {}, vi.fn(), { onBinaryFrame })
+  await vi.advanceTimersByTimeAsync(0)
+  const binary = host.session!.sealBinary(
+    encodeBrowserScreencastFrame({
+      opcode: BrowserScreencastOpcode.Frame,
+      seq: 9,
+      format: 'jpeg',
+      metadata: { imageWidth: 800 },
+      image: new Uint8Array([0xff, 0xd8, 0xff])
+    })
+  )
+  for (const listener of messageListeners) {
+    listener({ connectionId, bytesBase64: Buffer.from(binary).toString('base64') })
+  }
+  await vi.advanceTimersByTimeAsync(0)
+  expect(onBinaryFrame).toHaveBeenCalledWith({
+    opcode: 1,
+    seq: 9,
+    format: 'jpeg',
+    metadata: { imageWidth: 800 },
+    image: new Uint8Array([0xff, 0xd8, 0xff])
+  })
 })
