@@ -57,6 +57,8 @@ ehthumbs.db
 desktop.ini
 
 .oxlintcache
+/.direnv/
+/result
 /.cache/vite/
 /.cache/vite.lock/
 /.cache/typecheck/
