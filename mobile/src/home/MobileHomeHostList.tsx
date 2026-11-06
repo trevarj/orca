@@ -88,6 +88,7 @@ type MobileHomeHostRowProps = Pick<
   | 'onOpenActions'
 > & { item: HostCatalogEntry }
 
+/** Projects one desktop's connection state and current Iroh hint into its actionable home row. */
 const MobileHomeHostRow = memo(function MobileHomeHostRow(props: MobileHomeHostRowProps) {
   const { item, onOpen, onOpenActions } = props
   const state = resolveHomeHostConnectionState(

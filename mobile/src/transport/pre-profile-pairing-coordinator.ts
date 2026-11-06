@@ -157,6 +157,10 @@ export function startPreProfilePairing(args: {
   }
 }
 
+/**
+ * Authenticates a pairing path before saving the host; only relay offers use an install journal.
+ * Iroh pairs without a journal, preserving its dial hints for later reconnects.
+ */
 async function runPairing(
   offer: PairingOffer,
   connectOptions: ConnectOptions | undefined,

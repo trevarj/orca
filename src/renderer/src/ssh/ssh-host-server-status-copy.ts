@@ -160,6 +160,7 @@ function unavailableLine(reason: string | undefined): SshHostServerStatusLine {
   }
 }
 
+/** Returns a translated cause for the unsupported-host message, or null for unrecognized reasons. */
 function unavailableCause(reason: string): string | null {
   switch (reason) {
     case 'unsupported_host':

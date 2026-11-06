@@ -19,6 +19,7 @@ import { SettingsScreen } from './settings-screen-frame'
 
 type RelayChoice = IrohRelayPresetId | 'custom'
 
+/** Edit the phone's home relay without letting stale reads or failed saves replace a committed choice. */
 export default function IrohRelaySettingsScreen({ onBack }: { onBack?: () => void }) {
   const t = useMobileTranslation()
   useMobileColorScheme()
@@ -117,6 +118,7 @@ export default function IrohRelaySettingsScreen({ onBack }: { onBack?: () => voi
     }
   }, [acceptSavedRelay, loadAttempt, t])
 
+  /** Serialize durable saves and avoid overwriting newer mirrored preferences or unmounted UI. */
   const saveRelay = async (url: string | null) => {
     if (!loaded || savingRef.current) {
       return

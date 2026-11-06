@@ -33,6 +33,7 @@ export class RpcSynthesizedCloseIndex {
   }
 }
 
+/** Identifies replaced-socket events so late callbacks cannot change the current session. */
 export function isStaleRpcSocketEvent(
   current: WebSocket | null,
   opening: WebSocket,
@@ -47,6 +48,7 @@ export function isStaleRpcSocketEvent(
   return true
 }
 
+/** Logs transport lifetime and inbound-idle evidence, returning the supplied close code if present. */
 export function logRpcSocketClose(options: SocketCloseLogOptions): number | undefined {
   const event = options.event as { code?: number; reason?: string; wasClean?: boolean } | undefined
   const closeAt = Date.now()

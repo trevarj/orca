@@ -48,6 +48,10 @@ export function diagnoseConnection(args: DiagnoseConnectionArgs): ConnectionDiag
   }
 }
 
+/**
+ * Derives a likely cause, next action, and Relay-reportability flag from the selected failure.
+ * Structured paths distinguish Iroh timeouts and direct liveness failures from Relay incidents.
+ */
 function diagnoseFailure(
   args: DiagnoseConnectionArgs,
   failure: ConnectionLogEntry | undefined,
@@ -262,6 +266,7 @@ function diagnosticEvidence(entry: ConnectionLogEntry): string {
   return `${entry.code ?? ''} ${entry.message} ${entry.detail ?? ''}`
 }
 
+/** Recognizes connection-failure evidence while excluding native rendering errors from diagnosis. */
 function isDiagnosticFailure(entry: ConnectionLogEntry): boolean {
   if (entry.code === 'native-render-failed') {
     return false
@@ -280,6 +285,7 @@ function formatDelay(ms: number): string {
   return ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)}m`
 }
 
+/** Labels diagnostic paths, distinguishing Iroh and Relay from LAN/Tailscale direct connections. */
 function formatPath(path: MobileConnectionDiagnosticPath): string {
   if (path === 'relay') {
     return 'Relay'

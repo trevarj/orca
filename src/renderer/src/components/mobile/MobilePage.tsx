@@ -24,6 +24,10 @@ import {
   useMobilePairingAddressPreference
 } from './use-mobile-pairing-address-preference'
 
+/**
+ * Runs mobile installation, pairing, and device management with offers scoped to the current visit.
+ * Address-based modes wait for that visit's network lookup; Iroh can mint independently.
+ */
 export default function MobilePage(): React.JSX.Element {
   const [stepIdx, setStepIdx] = useState<StepIndex>(0)
 

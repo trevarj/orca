@@ -43,6 +43,7 @@ export function parseIrohRelayUrl(value: unknown): string | null {
   return `${url.origin}/`
 }
 
+/** Match a canonical relay preference to a preset, or custom when no origin matches. */
 export function getIrohRelayPreset(relayUrl: string | null): IrohRelayPresetId | 'custom' {
   return IROH_RELAY_PRESETS.find((preset) => preset.relayUrl === relayUrl)?.id ?? 'custom'
 }

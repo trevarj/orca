@@ -24,6 +24,7 @@ const RELAY_PROVIDER_INSTALL_WAIT_MS = 15_000
 const IROH_RELAY_BIND_WAIT_MS = 15_000
 
 export class RuntimeRpcMobilePairing extends RuntimeRpcPairing {
+  /** Coalesce Relay mint requests while letting local-only and iroh choices supersede them. */
   async createMobilePairingOffer(args: {
     address?: string | null
     connectionMode?: MobilePairingConnectionMode
@@ -86,6 +87,7 @@ export class RuntimeRpcMobilePairing extends RuntimeRpcPairing {
     return request
   }
 
+  /** Mint under a persisted connection policy, bounding iroh readiness and rejecting stale requests. */
   protected async createMobilePairingOfferSerial(
     args: {
       address?: string | null

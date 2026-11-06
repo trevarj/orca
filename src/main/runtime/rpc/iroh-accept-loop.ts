@@ -17,6 +17,7 @@ type IrohAcceptLoopOptions = {
   onConnection: (socket: IrohFramedSocket, bi: BiStream) => void
 }
 
+/** Accept until shutdown, counting pending handshakes toward the admission limit. */
 export async function runIrohAcceptLoop(args: IrohAcceptLoopOptions): Promise<void> {
   let pending = 0
   while (!args.signal.aborted) {
@@ -61,6 +62,7 @@ export async function runIrohAcceptLoop(args: IrohAcceptLoopOptions): Promise<vo
   }
 }
 
+/** Hand off one bi-stream, closing any connection that fails or outlives shutdown. */
 async function acceptConnection(incoming: Incoming, args: IrohAcceptLoopOptions): Promise<void> {
   let connection: Connection | null = null
   let handedOff = false
@@ -101,6 +103,7 @@ async function acceptConnection(incoming: Incoming, args: IrohAcceptLoopOptions)
   }
 }
 
+/** Bound the peer's first-stream wait; shutdown resolves null and releases the timer. */
 async function acceptBiWithTimeout(
   connection: Connection,
   signal: AbortSignal

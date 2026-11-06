@@ -22,6 +22,7 @@ export class RuntimeRpcShutdown extends RuntimeRpcMobilePairing {
     }
   }
 
+  /** Fence new binds, drain pending relay changes, then dispose sessions and stop owned transports. */
   async stop(): Promise<void> {
     // Fence new exposure and await pending rebind before snapshotting transports, or late wide listeners can leak into cleared arrays (STA-2370).
     this.stopping = true

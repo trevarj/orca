@@ -57,6 +57,7 @@ function emptyPairingQrMessage(args: {
   )
 }
 
+/** Displays the pairing offer and recovery actions, hiding address and firewall controls for Iroh. */
 export function MobileHeroPairingStep({
   pairQrDataUrl,
   pairQrSize = null,

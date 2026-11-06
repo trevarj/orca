@@ -55,6 +55,7 @@ export type SettingsMutationOperations = {
   notifySettingsChanged: (updates: Partial<GlobalSettings>, originWebContentsId?: number) => void
 }
 
+/** Normalize settings before mutation, rejecting invalid relay origins before publishing updates. */
 export function updateSettings(
   operations: SettingsMutationOperations,
   updates: Partial<GlobalSettings>,

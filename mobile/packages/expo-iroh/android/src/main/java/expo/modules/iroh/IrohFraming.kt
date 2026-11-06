@@ -3,11 +3,13 @@ package expo.modules.iroh
 internal object IrohFraming {
   const val MAX_PAYLOAD = 1_048_576
 
+  /** Encode a payload length up to 1 MiB as a four-byte big-endian header. */
   fun header(length: Int): ByteArray {
     require(length in 0..MAX_PAYLOAD) { "iroh_frame_too_large" }
     return byteArrayOf((length ushr 24).toByte(), (length ushr 16).toByte(), (length ushr 8).toByte(), length.toByte())
   }
 
+  /** Decode exactly four header bytes, rejecting lengths above the 1 MiB payload limit. */
   fun length(header: ByteArray): Int {
     require(header.size == 4) { "iroh_invalid_frame_header" }
     var length = 0

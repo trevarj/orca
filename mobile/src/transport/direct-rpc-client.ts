@@ -44,6 +44,7 @@ export class DirectRpcClient implements RpcClient {
   private authenticationGeneration = 0
   private livenessSession: RpcClientSocketSession | null = null
 
+  /** Starts dialing immediately, sharing authentication, liveness, and reconnect handling with injected transports. */
   constructor(
     private readonly endpoint: string,
     private readonly deviceToken: string,
