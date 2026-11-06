@@ -39,7 +39,7 @@ export function describeSocketDeadline(input: SocketDeadlineInput): SocketDeadli
       suspended: true,
       level: 'warn',
       code: 'suspended-dial',
-      title: input.kind === 'connect' ? 'WebSocket connect interrupted' : 'Handshake interrupted',
+      title: input.kind === 'connect' ? 'Transport connect interrupted' : 'Handshake interrupted',
       detail: `Connection deadline delayed for ${formatSuspendedElapsed(elapsedMs)}; app may have been suspended. Connection state unknown, re-dialing`,
       consoleMessage: `[net] ${input.kind} deadline delivery delayed`,
       consoleFields
@@ -50,8 +50,8 @@ export function describeSocketDeadline(input: SocketDeadlineInput): SocketDeadli
       suspended: false,
       level: 'error',
       code: 'connect-timeout',
-      title: 'WebSocket connect timeout',
-      detail: `No TCP/WS handshake within ${input.timeoutMs / 1000}s — endpoint unreachable?`,
+      title: 'Transport connect timeout',
+      detail: `Transport did not open within ${input.timeoutMs / 1000}s`,
       consoleMessage: '[net] connect-timeout fired (onopen never arrived)',
       consoleFields
     }

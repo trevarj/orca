@@ -11,6 +11,7 @@ import { rmSync, mkdtempSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { PersistedState } from '../../shared/persisted-state-types'
+import { getDefaultWorkspaceSession } from '../../shared/constants'
 
 const { loadUserSshConfigMock, sshConfigHostsToTargetsMock } = vi.hoisted(() => ({
   loadUserSshConfigMock: vi.fn(),
@@ -51,10 +52,11 @@ async function settledProfile(): Promise<PersistedState> {
     settings: {},
     ui: {},
     githubCache: { pr: {}, issue: {} },
-    workspaceSession: {}
+    workspaceSession: getDefaultWorkspaceSession()
   })
   const store = await createStore()
-  store.flush()
+  await store.flushPendingOrThrowAsync()
+  await closeTestStores()
   return readDataFile() as PersistedState
 }
 
@@ -105,5 +107,20 @@ describe('load-time normalization durability', () => {
     const persisted = await reloadAndSettleWrites()
 
     expect(persisted.settings.notifications.enabled).toBe(true)
+  })
+
+  it.each([
+    { saved: 'https://private-user:private-token@relay.example/', expected: null },
+    { saved: 'https://relay.example/private', expected: null },
+    { saved: 42, expected: null },
+    { saved: ' HTTPS://Relay.Example:443 ', expected: 'https://relay.example/' }
+  ])('persists loaded iroh relay repair for $saved', async ({ saved, expected }) => {
+    const settled = await settledProfile()
+    settled.settings.mobileIrohRelayUrl = saved as never
+    writeDataFile(settled)
+
+    const persisted = await reloadAndSettleWrites()
+
+    expect(persisted.settings.mobileIrohRelayUrl).toBe(expected)
   })
 })

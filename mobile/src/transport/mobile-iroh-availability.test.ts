@@ -4,11 +4,7 @@ vi.mock('react-native', () => ({
   Platform: { OS: 'ios' }
 }))
 
-import {
-  hostHasIrohEndpoint,
-  inferIrohPathMode,
-  isIrohNativePlatform
-} from './mobile-iroh-availability'
+import { hostHasIrohEndpoint, inferIrohPathMode } from './mobile-iroh-availability'
 import type { HostProfile } from './types'
 
 const host = (opts?: {
@@ -49,9 +45,5 @@ describe('mobile iroh availability', () => {
       'fallback'
     )
     expect(inferIrohPathMode(host())).toBe('off')
-  })
-
-  it('treats iOS as the only iroh-native platform', () => {
-    expect(isIrohNativePlatform()).toBe(true)
   })
 })

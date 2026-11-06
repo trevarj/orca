@@ -509,6 +509,46 @@ const IROH_NAPI_PLATFORM_PREFIX_BY_PLATFORM = {
   win32: 'iroh-win32-'
 }
 
+function assertPackagedIrohNativeVariantInstalled(
+  electronPlatformName,
+  electronArch,
+  nodeModulesDir = join(projectDir, 'node_modules')
+) {
+  const architecture = normalizeElectronArchitecture(electronArch)
+  const suffix =
+    electronPlatformName === 'linux'
+      ? architecture === 'arm'
+        ? '-gnueabihf'
+        : '-gnu'
+      : electronPlatformName === 'win32'
+        ? '-msvc'
+        : ''
+  const packageName = `@number0/iroh-${electronPlatformName}-${architecture}${suffix}`
+  const loader = JSON.parse(
+    readFileSync(join(nodeModulesDir, '@number0', 'iroh', 'package.json'), 'utf8')
+  )
+  if (!Object.hasOwn(loader.optionalDependencies ?? {}, packageName)) {
+    console.warn(
+      `[packaged-iroh] @number0/iroh ${loader.version} does not publish ${packageName}; ` +
+        `Iroh is unavailable on ${electronPlatformName}/${architecture}.`
+    )
+    return
+  }
+  const packageDir = join(nodeModulesDir, packageName)
+  const manifestPath = join(packageDir, 'package.json')
+  if (!existsSync(manifestPath)) {
+    throw new Error(`Packaging Iroh requires ${packageName}; run pnpm install:release.`)
+  }
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  if (
+    typeof manifest.main !== 'string' ||
+    !manifest.main.endsWith('.node') ||
+    !existsSync(join(packageDir, manifest.main))
+  ) {
+    throw new Error(`Packaging Iroh requires the native .node binary from ${packageName}.`)
+  }
+}
+
 function prunePackagedIrohNapi(resourcesDir, electronPlatformName, electronArch) {
   const scopeDir = join(resourcesDir, 'node_modules', '@number0')
   if (!existsSync(scopeDir)) {
@@ -584,6 +624,7 @@ function prunePackagedZodSources(resourcesDir) {
 // Fail missing target natives: electron-builder only warns for absent extraResources and could ship host-only installs as foreign slices.
 function assertPackagedNativeVariantsInstalled(electronPlatformName, electronArch) {
   const architecture = normalizeElectronArchitecture(electronArch)
+  assertPackagedIrohNativeVariantInstalled(electronPlatformName, architecture)
   const nodeModulesDir = join(projectDir, 'node_modules')
   const isInstalled = (name) => existsSync(join(nodeModulesDir, name, 'package.json'))
   const missing = []
@@ -684,6 +725,7 @@ function pruneMatchingFiles(directory, shouldPrune) {
 module.exports = {
   PACKAGED_RUNTIME_PACKAGE_ROOTS,
   WINDOWS_PACKAGED_RUNTIME_PACKAGE_ROOTS,
+  assertPackagedIrohNativeVariantInstalled,
   assertPackagedNativeVariantsInstalled,
   assertProcessHostOutputBuilt,
   createPackagedRuntimeNodeModuleResources,

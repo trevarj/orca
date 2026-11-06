@@ -22,6 +22,7 @@ import { browserSessionRegistry } from '../browser/browser-session-registry'
 import { sanitizeNetworkSettings } from './network-settings-sanitization'
 import { normalizeAppIconId } from '../../shared/app-icon'
 import { normalizeUiLanguage } from '../../shared/ui-language'
+import { parseIrohRelayUrl } from '../../shared/iroh-relay-preference'
 import { applyAppIcon } from '../app-icon'
 import { normalizeTerminalCustomThemes } from '../../shared/terminal-custom-themes'
 import { normalizeDesktopTerminalScrollbackRows } from '../../shared/terminal-scrollback-policy'
@@ -121,6 +122,9 @@ export function registerSettingsHandlers(
     delete sanitizedArgs.activeRuntimeEnvironmentId
     // Only the main-process directory picker may grant trusted floating-workspace paths.
     delete sanitizedArgs.floatingTerminalTrustedCwds
+    if ('mobileIrohRelayUrl' in sanitizedArgs) {
+      sanitizedArgs.mobileIrohRelayUrl = parseIrohRelayUrl(sanitizedArgs.mobileIrohRelayUrl)
+    }
     if ('computerAwakeMode' in sanitizedArgs) {
       Object.assign(
         sanitizedArgs,
@@ -308,18 +312,14 @@ export function registerSettingsHandlers(
 
   ipcMain.handle('settings:listFonts', () => listSystemFontFamilies())
 
-  ipcMain.handle('settings:previewGhosttyImport', () => {
-    return previewGhosttyImport(store)
-  })
+  ipcMain.handle('settings:previewGhosttyImport', () => previewGhosttyImport(store))
 
   ipcMain.handle('settings:previewWarpThemeImport', (event, args?: unknown) => {
     const source = args === undefined ? { kind: 'auto' } : args
     return previewWarpThemeImport(store, source, event.sender)
   })
 
-  ipcMain.handle('cache:getGitHub', () => {
-    return store.getGitHubCache()
-  })
+  ipcMain.handle('cache:getGitHub', () => store.getGitHubCache())
 
   ipcMain.handle('cache:setGitHub', (_event, args: { cache: PersistedState['githubCache'] }) => {
     store.setGitHubCache(args.cache)

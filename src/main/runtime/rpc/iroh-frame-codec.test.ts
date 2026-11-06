@@ -46,6 +46,38 @@ describe('iroh frame codec', () => {
     expect(Buffer.from(onFrame.mock.calls[1]?.[0] ?? []).toString('utf8')).toBe('two')
   })
 
+  it('decodes bytewise and empty frames without repeatedly copying buffered prefixes', () => {
+    const payload = Uint8Array.from({ length: 128 }, (_, i) => i)
+    const wire = Buffer.concat([
+      encodeLengthPrefixedFrame(new Uint8Array()),
+      encodeLengthPrefixedFrame(payload),
+      encodeLengthPrefixedFrame(new Uint8Array([255]))
+    ])
+    const frames: Uint8Array[] = []
+    const decoder = createFrameDecoder({
+      onFrame: (frame) => frames.push(frame),
+      onOversize: vi.fn()
+    })
+    const concat = vi.spyOn(Buffer, 'concat')
+    let concatenations = 0
+    try {
+      for (let offset = 0; offset < wire.byteLength; offset++) {
+        decoder.feed(wire.subarray(offset, offset + 1))
+      }
+      concatenations = concat.mock.calls.length
+    } finally {
+      concat.mockRestore()
+    }
+    wire.fill(0)
+    expect(concatenations).toBe(0)
+    expect(frames).toEqual([new Uint8Array(), payload, new Uint8Array([255])])
+
+    decoder.feed(encodeLengthPrefixedFrame(payload).subarray(0, 7))
+    decoder.reset()
+    decoder.feed(encodeLengthPrefixedFrame(new Uint8Array([42])))
+    expect(frames.at(-1)).toEqual(new Uint8Array([42]))
+  })
+
   it('rejects oversize declared lengths and clears state', () => {
     const onFrame = vi.fn<(frame: Uint8Array) => void>()
     const onOversize = vi.fn()

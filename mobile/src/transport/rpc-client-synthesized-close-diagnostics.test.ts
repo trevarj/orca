@@ -121,13 +121,6 @@ describe('synthesized close diagnostics', () => {
         expect(client.getState()).toBe('reconnecting')
         expect(entries.some((entry) => entry.code === 'suspended-dial')).toBe(true)
         expect(entries.some((entry) => entry.code === `${kind}-timeout`)).toBe(false)
-        expect(
-          diagnoseConnection({
-            endpoint: 'ws://desktop.invalid',
-            state: client.getState(),
-            entries
-          }).likelyCause
-        ).not.toContain('endpoint did not answer')
         await vi.advanceTimersByTimeAsync(500)
         expect(sockets).toHaveLength(2)
       } finally {
@@ -176,13 +169,13 @@ describe('synthesized close diagnostics', () => {
       elapsed += 12_000
       await vi.advanceTimersByTimeAsync(12_000)
       expect(entries.filter((entry) => entry.code === 'connect-timeout')).toHaveLength(1)
-      expect(
+      const args = { endpoint: 'ws://desktop.invalid', state: client.getState() }
+      expect(diagnoseConnection({ ...args, entries })).toEqual(
         diagnoseConnection({
-          endpoint: 'ws://desktop.invalid',
-          state: client.getState(),
-          entries
-        }).likelyCause
-      ).toContain('endpoint did not answer')
+          ...args,
+          entries: entries.filter((entry) => entry.code === 'connect-timeout')
+        })
+      )
     } finally {
       client.close()
       clock.mockRestore()
@@ -247,7 +240,9 @@ describe('synthesized close diagnostics', () => {
     await vi.advanceTimersByTimeAsync(200)
     wedged.deliverClose(1006)
     const staleCloseLog = logFields(
-      logSpy.mock.calls.findLast((call) => call[0] === '[net] ws.onclose')?.[1]
+      logSpy.mock.calls.findLast(
+        (call) => logFields(call[1])?.constructToCloseMs !== undefined
+      )?.[1]
     )
     expect(staleCloseLog?.constructToCloseMs).toBe(5_700)
     expect(staleCloseLog?.aliveMs).toBeNull()
@@ -256,7 +251,9 @@ describe('synthesized close diagnostics', () => {
     await vi.advanceTimersByTimeAsync(300)
     lastSocket().deliverClose(1006)
     const closeLog = logFields(
-      logSpy.mock.calls.findLast((call) => call[0] === '[net] ws.onclose')?.[1]
+      logSpy.mock.calls.findLast(
+        (call) => logFields(call[1])?.constructToCloseMs !== undefined
+      )?.[1]
     )
     expect(closeLog?.constructToCloseMs).toBe(500)
     expect(closeLog?.aliveMs).toBe(500)

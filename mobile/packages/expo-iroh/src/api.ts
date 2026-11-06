@@ -1,9 +1,9 @@
 import ExpoIrohModule from './ExpoIrohModule'
 import type { IrohConnectResult, IrohDialHints, IrohPathInfo, IrohStartResult } from './types'
 
-/** Bind local endpoint (n0 preset). Idempotent. */
-export async function irohStart(): Promise<IrohStartResult> {
-  return ExpoIrohModule.irohStart()
+/** Bind the local endpoint with its home relay; null selects the N0 preset. */
+export async function irohStart(homeRelayUrl: string | null): Promise<IrohStartResult> {
+  return ExpoIrohModule.irohStart(homeRelayUrl)
 }
 
 /** Dial peer by EndpointId; opens one long-lived bi-stream. */

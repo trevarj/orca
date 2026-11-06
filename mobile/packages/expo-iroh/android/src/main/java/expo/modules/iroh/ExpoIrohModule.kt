@@ -1,42 +1,31 @@
 package expo.modules.iroh
 
-import expo.modules.kotlin.exception.CodedException
+import expo.modules.kotlin.functions.Coroutine
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
-private const val NOT_IMPLEMENTED = "iroh_android_not_implemented"
-
-class IrohAndroidNotImplementedException :
-  CodedException(NOT_IMPLEMENTED, "Iroh is not implemented on Android yet", null)
-
 class ExpoIrohModule : Module() {
+  private val client = IrohClient(
+    { requireNotNull(appContext.reactContext) { "iroh_not_started" }.applicationContext },
+    { event, body -> sendEvent(event, body) }
+  )
   override fun definition() = ModuleDefinition {
     Name("ExpoIroh")
-
     Events("onMessage", "onPathChanged", "onClosed")
 
-    AsyncFunction("irohStart") {
-      throw IrohAndroidNotImplementedException()
+    AsyncFunction("irohStart") Coroutine { homeRelayUrl: String? ->
+      mapOf("endpointId" to client.start(homeRelayUrl))
     }
+    AsyncFunction("irohConnect") Coroutine { endpointId: String, relayUrl: String?, addresses: List<String>? ->
+      mapOf("connectionId" to client.connect(endpointId, relayUrl, addresses ?: emptyList()))
+    }
+    AsyncFunction("irohSend") Coroutine { id: String, bytesBase64: String ->
+      client.send(id, bytesBase64)
+    }
+    AsyncFunction("irohPathInfo") { id: String -> client.pathInfo(id) }
+    AsyncFunction("irohClose") Coroutine { id: String -> client.close(id) }
+    AsyncFunction("irohStop") Coroutine { -> client.stop() }
 
-    AsyncFunction("irohConnect") { _: String, _: String?, _: List<String>? ->
-      throw IrohAndroidNotImplementedException()
-    }
-
-    AsyncFunction("irohSend") { _: String, _: String ->
-      throw IrohAndroidNotImplementedException()
-    }
-
-    AsyncFunction("irohPathInfo") { _: String ->
-      throw IrohAndroidNotImplementedException()
-    }
-
-    AsyncFunction("irohClose") { _: String ->
-      throw IrohAndroidNotImplementedException()
-    }
-
-    AsyncFunction("irohStop") {
-      throw IrohAndroidNotImplementedException()
-    }
+    OnDestroy { client.destroy() }
   }
 }

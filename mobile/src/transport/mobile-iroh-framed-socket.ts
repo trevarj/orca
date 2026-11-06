@@ -1,6 +1,55 @@
 // Duck-typed WebSocket for rpc-client over @orca/expo-iroh.
 // Native module already applies 4B BE length framing; this layer only moves opaque E2EE bytes.
 import { loadExpoIroh, type ExpoIrohApi } from './expo-iroh-native-module'
+import { loadIrohHomeRelayUrl } from '../storage/preferences'
+import { IROH_HOME_RELAY_URL_KEY, subscribeMirroredKey } from '../storage/mirrored-storage-keys'
+
+const activeSockets = new Set<MobileIrohFramedSocket>()
+let unsubscribeRelayPreference: (() => void) | null = null
+let endpointStartBarrier: Promise<void> = Promise.resolve()
+let requestedHomeRelayUrl: string | null | undefined
+let relayRevision = 0
+let startingRevision: number | null = null
+
+function interruptEndpointStart(): void {
+  let stopped: Promise<void>
+  try {
+    // Interrupt before joining the queue: an old native bind may still be pending.
+    stopped = loadExpoIroh()
+      .irohStop()
+      .catch(() => {})
+  } catch {
+    stopped = Promise.resolve()
+  }
+  endpointStartBarrier = Promise.all([endpointStartBarrier, stopped]).then(() => {})
+}
+
+function trackSocket(socket: MobileIrohFramedSocket): void {
+  activeSockets.add(socket)
+  unsubscribeRelayPreference ??= subscribeMirroredKey(IROH_HOME_RELAY_URL_KEY, (value) => {
+    if (value === requestedHomeRelayUrl) {
+      return
+    }
+    relayRevision += 1
+    const superseded = [...activeSockets]
+    interruptEndpointStart()
+    for (const socket of superseded) {
+      // Use the ordinary RPC close/reconnect path, including subscription replay.
+      socket.close(1000, 'iroh_home_relay_changed')
+    }
+  })
+}
+
+function untrackSocket(socket: MobileIrohFramedSocket): void {
+  activeSockets.delete(socket)
+  if (activeSockets.size === 0) {
+    unsubscribeRelayPreference?.()
+    unsubscribeRelayPreference = null
+    if (startingRevision === relayRevision) {
+      interruptEndpointStart()
+    }
+  }
+}
 
 export type PathType = 'direct' | 'relayed' | 'mixed' | 'unknown'
 
@@ -39,6 +88,7 @@ export class MobileIrohFramedSocket {
   private pathType: PathType = 'unknown'
 
   constructor(private readonly options: MobileIrohFramedSocketOptions) {
+    trackSocket(this)
     void this.dial()
   }
 
@@ -83,14 +133,65 @@ export class MobileIrohFramedSocket {
   private async dial(): Promise<void> {
     try {
       const iroh = loadExpoIroh()
-      await iroh.irohStart()
-      console.log('[iroh]', 'endpoint_started')
-      this.options.onLog?.('Iroh endpoint started')
+      const start = endpointStartBarrier.then(async () => {
+        if (this.closed) {
+          return null
+        }
+        const revision = relayRevision
+        // The socket factory is reused on reconnect; never capture this in the logical client.
+        const homeRelayUrl = await loadIrohHomeRelayUrl()
+        if (this.closed || revision !== relayRevision) {
+          return null
+        }
+        requestedHomeRelayUrl = homeRelayUrl
+        startingRevision = revision
+        try {
+          const result = await iroh.irohStart(homeRelayUrl)
+          return this.closed || revision !== relayRevision ? null : result
+        } finally {
+          startingRevision = null
+        }
+      })
+      endpointStartBarrier = start.then(
+        () => {},
+        () => {}
+      )
+      const started = await start
+      if (!started) {
+        return
+      }
+      const { endpointId } = started
+      const localEndpointPrefix = endpointId.slice(0, 12)
+      const relayHintHost = this.options.dialHints?.relayUrl
+        ? new URL(this.options.dialHints.relayUrl).hostname
+        : null
+      console.log('[iroh]', 'endpoint_started', { localEndpointPrefix, relayHintHost })
+      this.options.onLog?.(
+        'Iroh endpoint started',
+        `local=${localEndpointPrefix}; relay hint=${relayHintHost ?? 'discovery'}`
+      )
       if (this.closed) {
         return
       }
       const endpointPrefix = this.options.desktopEndpointId.slice(0, 12)
-      console.log('[iroh]', 'irohConnect_begin', { endpointPrefix })
+      console.log('[iroh]', 'irohConnect_begin', {
+        endpointPrefix,
+        relayHintHost,
+        directHintCount: this.options.dialHints?.directAddresses?.length ?? 0
+      })
+      // Native receive/close tasks start before the bridge resolves connect.
+      // Keep early close reasons so an immediate 4001 cannot become a dead OPEN socket.
+      const closedWhileConnecting = new Map<string, string>()
+      this.unsubClosed = iroh.onIrohClosed((event) => {
+        if (this.closed) {
+          return
+        }
+        if (this.connectionId === null) {
+          closedWhileConnecting.set(event.connectionId, event.reason)
+        } else if (event.connectionId === this.connectionId) {
+          this.handleNativeClose(event.reason)
+        }
+      })
       const { connectionId } = await iroh.irohConnect(this.options.desktopEndpointId, {
         relayUrl: this.options.dialHints?.relayUrl ?? null,
         directAddresses: this.options.dialHints?.directAddresses ?? []
@@ -102,6 +203,12 @@ export class MobileIrohFramedSocket {
         return
       }
       this.connectionId = connectionId
+      const earlyCloseReason = closedWhileConnecting.get(connectionId)
+      closedWhileConnecting.clear()
+      if (earlyCloseReason !== undefined) {
+        this.handleNativeClose(earlyCloseReason)
+        return
+      }
       this.bindNativeEvents(iroh, connectionId)
       this.readyState = this.OPEN
       this.onopen?.()
@@ -132,19 +239,16 @@ export class MobileIrohFramedSocket {
       })
       this.options.onLog?.(`Iroh path ${event.pathType}`, event.detail)
     })
-    this.unsubClosed = iroh.onIrohClosed((event) => {
-      if (event.connectionId !== connectionId) {
-        return
-      }
-      console.log('[iroh]', 'session_closed', { reason: event.reason })
-      // Why: the desktop closes QUIC with the WS auth code; surfacing 4001 lets
-      // rpc-client latch auth-failed (re-pair banner) instead of reconnecting forever.
-      // event.reason is quinn's ConnectionError Display via iroh-ffi Connection.closed(),
-      // e.g. "closed by peer: 4001: unauthorized" — the numeric application close code
-      // always appears in that string (IrohLib 1.1); revalidate on iroh-ffi upgrades.
-      const code = /\b4001\b/.test(event.reason) ? 4001 : 1000
-      this.fail(code, event.reason || 'iroh_closed')
-    })
+  }
+
+  private handleNativeClose(reason: string): void {
+    console.log('[iroh]', 'session_closed', { reason })
+    // Why: the desktop closes QUIC with the WS auth code; surfacing 4001 lets
+    // rpc-client latch auth-failed (re-pair banner) instead of reconnecting forever.
+    // The pinned iroh-ffi versions expose quinn's ConnectionError Display,
+    // e.g. "closed by peer: 4001: unauthorized"; revalidate on SDK upgrades.
+    const code = /\b4001\b/.test(reason) ? 4001 : 1000
+    this.fail(code, reason || 'iroh_closed')
   }
 
   private fail(code: number, reason: string): void {
@@ -159,6 +263,7 @@ export class MobileIrohFramedSocket {
     }
     this.closed = true
     this.readyState = this.CLOSED
+    untrackSocket(this)
     this.unsubMessage?.remove()
     this.unsubPath?.remove()
     this.unsubClosed?.remove()

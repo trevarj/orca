@@ -280,8 +280,12 @@ describe('HeroFlow height', () => {
       })
 
       expect(screen.queryByText('Network')).not.toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: 'Refresh network interfaces' })).not.toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: /Also use a faster local path/i })).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: 'Refresh network interfaces' })
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: /Also use a faster local path/i })
+      ).not.toBeInTheDocument()
       expect(screen.queryByTestId('windows-firewall-notice')).not.toBeInTheDocument()
       await user.click(screen.getByRole('button', { name: 'Copy pairing code' }))
       await user.click(screen.getByRole('button', { name: 'Regenerate code' }))

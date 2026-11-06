@@ -5,8 +5,7 @@ private let ON_PATH_CHANGED = "onPathChanged"
 private let ON_CLOSED = "onClosed"
 
 public class ExpoIrohModule: Module {
-  private let client = IrohClient.shared
-  private var wired = false
+  private let client = IrohClient()
 
   public func definition() -> ModuleDefinition {
     Name("ExpoIroh")
@@ -17,8 +16,12 @@ public class ExpoIrohModule: Module {
       self.wireCallbacks()
     }
 
-    AsyncFunction("irohStart") { () -> [String: String] in
-      let endpointId = try await self.client.start()
+    OnDestroy {
+      self.client.destroy()
+    }
+
+    AsyncFunction("irohStart") { (homeRelayUrl: String?) -> [String: String] in
+      let endpointId = try await self.client.start(homeRelayUrl: homeRelayUrl)
       return ["endpointId": endpointId]
     }
 
@@ -51,8 +54,6 @@ public class ExpoIrohModule: Module {
   }
 
   private func wireCallbacks() {
-    guard !wired else { return }
-    wired = true
     client.onMessage = { [weak self] connectionId, bytesBase64 in
       self?.sendEvent(ON_MESSAGE, [
         "connectionId": connectionId,

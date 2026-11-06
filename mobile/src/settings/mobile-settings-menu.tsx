@@ -7,10 +7,12 @@ import { colors, spacing, typography } from '../theme/mobile-theme'
 
 export function MobileSettingsFrame({
   children,
-  onBack
+  onBack,
+  title = 'Settings'
 }: {
   children: ReactNode
   onBack?: () => void
+  title?: string
 }) {
   const router = useRouter()
   const insets = useSafeAreaInsets()
@@ -25,11 +27,12 @@ export function MobileSettingsFrame({
         >
           <ChevronLeft size={22} color={colors.textSecondary} />
         </Pressable>
-        <Text style={styles.heading}>Settings</Text>
+        <Text style={styles.heading}>{title}</Text>
       </View>
       <ScrollView
         contentContainerStyle={{ paddingBottom: insets.bottom + spacing.lg }}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
         {children}
       </ScrollView>

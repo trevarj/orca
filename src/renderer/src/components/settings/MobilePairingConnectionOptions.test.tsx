@@ -3,7 +3,7 @@
 import '@testing-library/jest-dom/vitest'
 
 import { StrictMode, useSyncExternalStore } from 'react'
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MobileRelayStatusDetail } from '../../../../shared/mobile-relay-status'
@@ -18,6 +18,8 @@ type MobileRelayStoreState = {
   orcaProfileSignInProgress?: OrcaCloudSignInProgress | null
   connectCurrentOrcaProfile: () => Promise<null>
   fetchOrcaProfileAuthStatus: () => Promise<OrcaProfileAuthStatus | null>
+  settings: { mobileIrohRelayUrl: string | null }
+  updateSettingsOrThrow: (patch: { mobileIrohRelayUrl: string | null }) => Promise<void>
 }
 
 const mocks = vi.hoisted(() => ({
@@ -50,14 +52,18 @@ describe('MobilePairingConnectionOptions', () => {
   let statusListener: ((detail: MobileRelayStatusDetail) => void) | null
   const connect = vi.fn().mockResolvedValue(null)
   const fetchAuthStatus = vi.fn().mockResolvedValue(null)
-  const getIrohStatus = vi.fn().mockResolvedValue({ bound: false, endpointId: null })
+  const getIrohStatus = vi.fn()
+  const updateSettingsOrThrow = vi.fn()
 
   beforeEach(() => {
     statusListener = null
     connect.mockClear()
     fetchAuthStatus.mockClear()
     getIrohStatus.mockReset()
-    getIrohStatus.mockResolvedValue({ bound: false, endpointId: null })
+    getIrohStatus.mockResolvedValue({ bound: false, endpointId: null, relayUrl: null })
+    updateSettingsOrThrow.mockReset().mockImplementation(async (patch) => {
+      publishStoreState({ ...mocks.state, settings: { ...mocks.state.settings, ...patch } })
+    })
     Object.defineProperty(window, 'api', {
       configurable: true,
       value: {
@@ -73,6 +79,8 @@ describe('MobilePairingConnectionOptions', () => {
       }
     })
     mocks.state = {
+      settings: { mobileIrohRelayUrl: null },
+      updateSettingsOrThrow,
       orcaProfileAuthStatus: {
         activeProfileId: 'profile-1',
         configured: true,
@@ -84,7 +92,10 @@ describe('MobilePairingConnectionOptions', () => {
     }
   })
 
-  afterEach(() => cleanup())
+  afterEach(() => {
+    cleanup()
+    vi.useRealTimers()
+  })
 
   it('shows Sign in directly under Orca Relay, above LAN', async () => {
     const user = userEvent.setup()
@@ -237,6 +248,7 @@ describe('MobilePairingConnectionOptions', () => {
 
   it('shows relay status when signed in on Orca Relay', async () => {
     mocks.state = {
+      ...mocks.state,
       orcaProfileAuthStatus: {
         activeProfileId: 'profile-1',
         configured: true,
@@ -287,7 +299,7 @@ describe('MobilePairingConnectionOptions', () => {
   })
 
   it('shows a selectable Iroh option when the transport is bound', async () => {
-    getIrohStatus.mockResolvedValue({ bound: true, endpointId: 'a'.repeat(64) })
+    getIrohStatus.mockResolvedValue({ bound: true, endpointId: 'a'.repeat(64), relayUrl: null })
     const onChange = vi.fn()
     const user = userEvent.setup()
     render(<MobilePairingConnectionOptions value="local-only" onChange={onChange} />)
@@ -303,18 +315,194 @@ describe('MobilePairingConnectionOptions', () => {
     expect(onChange).toHaveBeenCalledWith('iroh')
   })
 
-  it('disables Iroh when the transport failed to bind', async () => {
-    getIrohStatus.mockResolvedValue({ bound: false, endpointId: null })
+  it('keeps the home relay selector usable while Iroh is unavailable and reconciles external saves', async () => {
+    getIrohStatus.mockResolvedValue({ bound: false, endpointId: null, relayUrl: null })
     const onChange = vi.fn()
     const user = userEvent.setup()
     render(<MobilePairingConnectionOptions value="local-only" onChange={onChange} />)
 
     const iroh = await screen.findByRole('radio', { name: /Iroh/i })
     expect(iroh).toHaveAttribute('aria-disabled', 'true')
-    expect(screen.getByText('Transport failed to bind. Restart Orca, or check logs.')).toBeVisible()
+    const selector = screen.getByRole('combobox', { name: 'Iroh home relay' })
+    expect(selector).toBeEnabled()
+    expect(screen.getByRole('radiogroup')).not.toContainElement(selector)
 
     await user.click(iroh)
     expect(onChange).not.toHaveBeenCalled()
+
+    selector.focus()
+    await user.keyboard('{ArrowDown}')
+    await user.click(await screen.findByRole('option', { name: 'Europe' }))
+    await waitFor(() =>
+      expect(updateSettingsOrThrow).toHaveBeenCalledWith({
+        mobileIrohRelayUrl: 'https://euc1-1.relay.n0.iroh.link./'
+      })
+    )
+    expect(selector).toHaveTextContent('Europe')
+
+    act(() => {
+      publishStoreState({
+        ...mocks.state,
+        settings: { mobileIrohRelayUrl: 'https://other.example/' }
+      })
+    })
+    expect(selector).toHaveTextContent('Custom HTTPS')
+    expect(screen.getByRole('textbox', { name: 'Custom HTTPS relay origin' })).toHaveValue(
+      'https://other.example/'
+    )
+    act(() => {
+      publishStoreState({
+        ...mocks.state,
+        settings: { mobileIrohRelayUrl: 'https://aps1-1.relay.n0.iroh.link./' }
+      })
+    })
+    expect(selector).toHaveTextContent('Asia (Singapore)')
+    expect(screen.queryByRole('textbox', { name: 'Custom HTTPS relay origin' })).toBeNull()
+    expect(updateSettingsOrThrow).toHaveBeenCalledOnce()
+  })
+
+  it('selects Custom by keyboard and saves only a valid HTTPS origin on Enter', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    render(<MobilePairingConnectionOptions value="local-only" onChange={onChange} />)
+
+    screen.getByRole('combobox', { name: 'Iroh home relay' }).focus()
+    await user.keyboard('{ArrowDown}')
+    await screen.findByRole('listbox')
+    await user.keyboard('{End}{Enter}')
+    const input = await screen.findByRole('textbox', { name: 'Custom HTTPS relay origin' })
+    expect(updateSettingsOrThrow).not.toHaveBeenCalled()
+    expect(onChange).not.toHaveBeenCalled()
+
+    for (const invalid of [
+      'http://relay.example',
+      'https://user:secret@relay.example',
+      'https://relay.example/path',
+      'https://relay.example?token=secret'
+    ]) {
+      await user.clear(input)
+      await user.type(input, invalid)
+      await user.click(screen.getByRole('button', { name: 'Save relay' }))
+      expect(screen.getByRole('alert')).toBeVisible()
+      expect(updateSettingsOrThrow).not.toHaveBeenCalled()
+      expect(mocks.state.settings.mobileIrohRelayUrl).toBeNull()
+    }
+
+    await user.clear(input)
+    await user.type(input, 'https://custom.example{Enter}')
+    await waitFor(() =>
+      expect(updateSettingsOrThrow).toHaveBeenCalledWith({
+        mobileIrohRelayUrl: 'https://custom.example/'
+      })
+    )
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('keeps the persisted preset after a rejected save and exposes a safe accessible error', async () => {
+    mocks.state.settings.mobileIrohRelayUrl = 'https://euc1-1.relay.n0.iroh.link./'
+    const save = Promise.withResolvers<void>()
+    updateSettingsOrThrow.mockReturnValueOnce(save.promise)
+    const user = userEvent.setup()
+    render(<MobilePairingConnectionOptions value="local-only" onChange={vi.fn()} />)
+    const selector = screen.getByRole('combobox', { name: 'Iroh home relay' })
+
+    selector.focus()
+    await user.keyboard('{ArrowDown}')
+    await user.click(await screen.findByRole('option', { name: 'US West' }))
+    expect(selector).toBeDisabled()
+    await act(async () => save.reject(new Error('private backend failure: secret-token')))
+
+    const error = await screen.findByRole('alert')
+    expect(error).toBeVisible()
+    expect(error).not.toHaveTextContent('secret-token')
+    expect(error.textContent?.trim()).not.toBe('')
+    expect(selector).toBeEnabled()
+    expect(selector).toHaveTextContent('Europe')
+    expect(mocks.state.settings.mobileIrohRelayUrl).toBe('https://euc1-1.relay.n0.iroh.link./')
+  })
+
+  it('resets Iroh availability on relay changes, ignores stale status and recovers on polling', async () => {
+    vi.useFakeTimers()
+    type IrohStatus = { bound: boolean; endpointId: string | null; relayUrl: string | null }
+    const initial = Promise.withResolvers<IrohStatus>()
+    getIrohStatus.mockReturnValueOnce(initial.promise)
+    render(<MobilePairingConnectionOptions value="local-only" onChange={vi.fn()} />)
+    await act(async () => {
+      initial.resolve({ bound: true, endpointId: 'a'.repeat(64), relayUrl: null })
+    })
+    const iroh = screen.getByRole('radio', { name: /Iroh/i })
+    expect(iroh).toHaveAttribute('aria-disabled', 'false')
+
+    const stale = Promise.withResolvers<IrohStatus>()
+    const current = Promise.withResolvers<IrohStatus>()
+    getIrohStatus.mockReturnValueOnce(stale.promise).mockReturnValueOnce(current.promise)
+    act(() => {
+      publishStoreState({
+        ...mocks.state,
+        settings: { mobileIrohRelayUrl: 'https://euc1-1.relay.n0.iroh.link./' }
+      })
+    })
+    expect(iroh).toHaveAttribute('aria-disabled', 'true')
+    act(() => {
+      publishStoreState({
+        ...mocks.state,
+        settings: { mobileIrohRelayUrl: 'https://aps1-1.relay.n0.iroh.link./' }
+      })
+    })
+    await act(async () => {
+      stale.resolve({ bound: true, endpointId: 'a'.repeat(64), relayUrl: null })
+    })
+    expect(iroh).toHaveAttribute('aria-disabled', 'true')
+    await act(async () => {
+      current.resolve({ bound: false, endpointId: null, relayUrl: null })
+    })
+    getIrohStatus.mockResolvedValue({
+      bound: true,
+      endpointId: 'b'.repeat(64),
+      relayUrl: 'https://actual-relay.example/'
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000)
+    })
+    expect(iroh).toHaveAttribute('aria-disabled', 'false')
+  })
+
+  it('does not overlap slow Iroh status requests that could overwrite a successful bind', async () => {
+    vi.useFakeTimers()
+    const status = Promise.withResolvers<{
+      bound: boolean
+      endpointId: string | null
+      relayUrl: string | null
+    }>()
+    getIrohStatus.mockReturnValueOnce(status.promise)
+    render(<MobilePairingConnectionOptions value="local-only" onChange={vi.fn()} />)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000)
+    })
+    expect(getIrohStatus).toHaveBeenCalledOnce()
+    await act(async () => {
+      status.resolve({ bound: true, endpointId: 'a'.repeat(64), relayUrl: null })
+    })
+    expect(screen.getByRole('radio', { name: /Iroh/i })).toHaveAttribute('aria-disabled', 'false')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000)
+    })
+    expect(getIrohStatus).toHaveBeenCalledOnce()
+  })
+
+  it('navigates from the focused fallback when the selected Iroh path is unavailable', async () => {
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    render(<MobilePairingConnectionOptions value="iroh" onChange={onChange} />)
+    const relay = screen.getByRole('radio', { name: /Orca Relay/i })
+    expect(relay).toHaveAttribute('tabindex', '0')
+    relay.focus()
+
+    await user.keyboard('{ArrowDown}')
+
+    expect(onChange).toHaveBeenCalledWith('local-only')
+    expect(screen.getByRole('radio', { name: /^LAN\b/i })).toHaveFocus()
   })
 
   it('keeps LAN available while Relay is retrying', async () => {
@@ -348,7 +536,7 @@ describe('MobilePairingConnectionOptions', () => {
   })
 
   it('skips Relay in keyboard navigation while Relay is retrying', async () => {
-    getIrohStatus.mockResolvedValue({ bound: true, endpointId: 'a'.repeat(64) })
+    getIrohStatus.mockResolvedValue({ bound: true, endpointId: 'a'.repeat(64), relayUrl: null })
     const onChange = vi.fn()
     const user = userEvent.setup()
     render(

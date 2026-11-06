@@ -289,6 +289,7 @@ describe('OrcaRuntimeRpcServer', () => {
   it('omits iroh from pairing offers when the kill switch disables the transport', async () => {
     const userDataPath = mkdtempSync(join(tmpdir(), 'orca-runtime-rpc-'))
     const server = new OrcaRuntimeRpcServer({
+      methods: [],
       runtime: new OrcaRuntimeService(),
       userDataPath,
       enableWebSocket: true,
@@ -305,7 +306,7 @@ describe('OrcaRuntimeRpcServer', () => {
       if (!offer.available) {
         throw new Error('pairing unavailable')
       }
-      expect(server.getIrohEndpointId()).toBeNull()
+      expect(server.getIrohStatus().bound).toBe(false)
       const parsed = parsePairingCode(offer.pairingUrl)
       expect(parsed).not.toHaveProperty('iroh')
     } finally {
@@ -319,13 +320,15 @@ describe('OrcaRuntimeRpcServer', () => {
     const userDataPath = mkdtempSync(join(tmpdir(), 'orca-runtime-rpc-'))
     const endpointId = 'b'.repeat(64)
     const server = new OrcaRuntimeRpcServer({
+      methods: [],
       runtime: new OrcaRuntimeService(),
       userDataPath,
       enableWebSocket: true,
       wsPort: 0,
       irohBindEndpoint: async () => ({
-        // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: The server calls only acceptNext/close/id on the bound endpoint, which the double provides.
+        // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: The double supplies the endpoint operations consumed by IrohTransport.
         endpoint: {
+          online: async () => {},
           acceptNext: async () => null,
           close: async () => {},
           id: () => ({ toString: () => endpointId })
@@ -334,8 +337,9 @@ describe('OrcaRuntimeRpcServer', () => {
       })
     })
     await server.start()
+    await server.setIrohRelayUrl(null)
     try {
-      expect(server.getIrohEndpointId()).toBe(endpointId)
+      expect(server.getIrohStatus().endpointId).toBe(endpointId)
       const offer = await server.createMobilePairingOffer({
         address: '100.64.1.20',
         name: 'Mobile test',

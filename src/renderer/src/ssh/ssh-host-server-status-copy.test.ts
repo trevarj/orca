@@ -163,6 +163,33 @@ describe('SSH host server status line', () => {
     ).toMatchObject({ text: expect.not.stringContaining('future_reason'), detail: 'future_reason' })
   })
 
+  it('classifies a missing SSH deployment template as a desktop build problem', () => {
+    const state = {
+      managedServer: {
+        kind: 'relay' as const,
+        reason: 'orcad_unavailable' as const,
+        detail: 'artifacts_unavailable'
+      }
+    }
+    const live = sshHostServerStatusLine(plain, state)
+    const recorded = sshHostServerStatusLine(
+      {
+        ...plain,
+        managedServerUnavailable: { reason: 'artifacts_unavailable', appVersion: '1.5.0' }
+      },
+      undefined
+    )
+    for (const line of [live, recorded]) {
+      expect(line).toMatchObject({ tone: 'destructive' })
+      expect(line?.text).toMatch(/this Orca build.*SSH server deployment template/i)
+      expect(line?.text).toMatch(/build or install.*template.*host’s platform/i)
+      expect(line?.text).toMatch(/restart Orca.*reconnect/i)
+      expect(line?.text).not.toMatch(/older version|host isn’t supported/i)
+    }
+    // Connection errors have no Details action, so the remedy must also survive there.
+    expect(sshConnectFailureText(state, 'Connection failed')).toBe(live?.text)
+  })
+
   it('tells an unsupported host to install an older Orca, never to fall back', () => {
     const line = sshHostServerStatusLine(plain, {
       managedServer: { kind: 'relay', reason: 'orcad_unavailable', detail: 'native_preflight' }

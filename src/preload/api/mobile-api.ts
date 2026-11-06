@@ -78,7 +78,11 @@ export type MobileApi = {
   listRuntimeAccessGrants: () => Promise<{ grants: RuntimeAccessGrant[] }>
   revokeRuntimeAccess: (args: { deviceId: string }) => Promise<{ revoked: boolean }>
   /** Iroh endpoint bind status for the pairing path picker. */
-  getIrohStatus: () => Promise<{ bound: boolean; endpointId: string | null }>
+  getIrohStatus: () => Promise<{
+    bound: boolean
+    endpointId: string | null
+    relayUrl: string | null
+  }>
   getRelayStatus: () => Promise<MobileRelayStatusDetail>
   onRelayStatusChanged: (callback: (detail: MobileRelayStatusDetail) => void) => () => void
   consumePendingUnpairedDeviceAuthFailure?: () => Promise<boolean>

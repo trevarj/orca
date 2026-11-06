@@ -31,12 +31,20 @@ import {
 } from './runtime-rpc-pairing-types'
 
 export class RuntimeRpcPairing extends RuntimeRpcNetworkExposure {
-  getIrohEndpointId(): string | null {
-    return this.irohTransport?.endpointId ?? null
+  getIrohStatus(): { bound: boolean; endpointId: string | null; relayUrl: string | null } {
+    const endpointId =
+      !this.stopping && this.appliedIrohRelayGeneration === this.irohRelayGeneration
+        ? (this.irohTransport?.endpointId ?? null)
+        : null
+    return {
+      bound: endpointId !== null,
+      endpointId,
+      relayUrl: endpointId ? (this.irohTransport?.endpointDialHints()?.relayUrl ?? null) : null
+    }
   }
 
   protected getIrohPairingTarget(): PairingIroh | null {
-    const endpointId = this.irohTransport?.endpointId
+    const { endpointId } = this.getIrohStatus()
     if (!endpointId) {
       return null
     }
@@ -184,7 +192,7 @@ export class RuntimeRpcPairing extends RuntimeRpcNetworkExposure {
     if (args.includeIroh && !iroh) {
       return pairingUnavailable(
         'iroh_unavailable',
-        'Iroh pairing is unavailable. Restart Orca or inspect the Iroh transport logs.'
+        'Iroh pairing is unavailable. Choose another home relay in Mobile settings or inspect the Iroh transport logs.'
       )
     }
     let endpoint: string

@@ -1,11 +1,12 @@
-import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 
 const require = createRequire(import.meta.url)
 const {
+  assertPackagedIrohNativeVariantInstalled,
   createPackagedRuntimeNodeModuleResources,
   prunePackagedIrohNapi
 } = require('../packaged-runtime-node-modules.cjs')
@@ -36,5 +37,49 @@ it('prunes non-target @number0/iroh platform subpackages from packaged runtime r
     ])
   } finally {
     await rm(resourcesDir, { recursive: true, force: true })
+  }
+})
+
+it('requires the GNU Iroh binary and reports unsupported Darwin x64 without blocking packaging', async () => {
+  const nodeModulesDir = await mkdtemp(join(tmpdir(), 'orca-iroh-native-'))
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  try {
+    const loaderDir = join(nodeModulesDir, '@number0', 'iroh')
+    const nativeDir = join(nodeModulesDir, '@number0', 'iroh-linux-x64-gnu')
+    await mkdir(loaderDir, { recursive: true })
+    await writeFile(
+      join(loaderDir, 'package.json'),
+      JSON.stringify({
+        version: '1.1.0',
+        optionalDependencies: {
+          '@number0/iroh-linux-x64-gnu': '1.1.0',
+          '@number0/iroh-linux-x64-musl': '1.1.0'
+        }
+      })
+    )
+    expect(() => assertPackagedIrohNativeVariantInstalled('linux', 'x64', nodeModulesDir)).toThrow(
+      '@number0/iroh-linux-x64-gnu'
+    )
+    await mkdir(nativeDir, { recursive: true })
+    await writeFile(
+      join(nativeDir, 'package.json'),
+      JSON.stringify({ main: 'iroh.linux-x64-gnu.node' })
+    )
+    expect(() => assertPackagedIrohNativeVariantInstalled('linux', 'x64', nodeModulesDir)).toThrow(
+      'native .node binary'
+    )
+    await writeFile(join(nativeDir, 'iroh.linux-x64-gnu.node'), '')
+    expect(() =>
+      assertPackagedIrohNativeVariantInstalled('linux', 'x64', nodeModulesDir)
+    ).not.toThrow()
+    expect(() =>
+      assertPackagedIrohNativeVariantInstalled('darwin', 'x64', nodeModulesDir)
+    ).not.toThrow()
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining('Iroh is unavailable on darwin/x64')
+    )
+  } finally {
+    warning.mockRestore()
+    await rm(nodeModulesDir, { recursive: true, force: true })
   }
 })

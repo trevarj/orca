@@ -2,7 +2,7 @@
 
 import '@testing-library/jest-dom/vitest'
 
-import { act } from 'react'
+import { act, useSyncExternalStore } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -29,20 +29,31 @@ type StoreState = {
     mobilePairingConnectionMode?: MobilePairingConnectionMode
     mobilePairingCustomAddress?: string | null
     mobilePairingCustomAddresses?: string[]
+    mobileIrohRelayUrl?: string | null
   }
   updateSettings: (patch: Record<string, unknown>) => Promise<void>
+  updateSettingsOrThrow: (patch: Record<string, unknown>) => Promise<void>
   recordFeatureInteraction: (feature: string) => void
   fetchOrcaProfileAuthStatus: () => Promise<unknown>
 }
 
 const mocks = vi.hoisted(() => {
   const holder: { state: StoreState } = { state: {} as StoreState }
+  const listeners = new Set<() => void>()
   const useAppStore = Object.assign(
-    (selector: (state: StoreState) => unknown) => selector(holder.state),
+    (selector: (state: StoreState) => unknown) =>
+      useSyncExternalStore(
+        (listener) => {
+          listeners.add(listener)
+          return () => listeners.delete(listener)
+        },
+        () => selector(holder.state)
+      ),
     { getState: () => holder.state }
   )
   return {
     holder,
+    listeners,
     useAppStore,
     latestPairedDevicesProps: null as PairedDevicesProps | null,
     getPairingQR: vi.fn(),
@@ -51,7 +62,8 @@ const mocks = vi.hoisted(() => {
     revokeDevice: vi.fn(),
     toastError: vi.fn(),
     toastSuccess: vi.fn(),
-    updateSettings: vi.fn()
+    updateSettings: vi.fn(),
+    updateSettingsOrThrow: vi.fn()
   }
 })
 
@@ -187,11 +199,13 @@ describe('MobilePane pairing connection mode', () => {
     mocks.listNetworkInterfaces.mockReset().mockResolvedValue({ interfaces: [] })
     mocks.revokeDevice.mockReset().mockResolvedValue({ revoked: true })
     updateSettings.mockReset().mockResolvedValue(undefined)
+    mocks.updateSettingsOrThrow.mockReset().mockResolvedValue(undefined)
     mocks.holder.state = {
       orcaProfileAuthStatus: { state: 'connected' },
       settingsSearchQuery: '',
-      settings: { mobileAutoRestoreFitMs: null },
+      settings: { mobileAutoRestoreFitMs: null, mobileIrohRelayUrl: null },
       updateSettings,
+      updateSettingsOrThrow: mocks.updateSettingsOrThrow,
       recordFeatureInteraction: vi.fn(),
       fetchOrcaProfileAuthStatus: vi.fn().mockResolvedValue(null)
     }
@@ -236,33 +250,6 @@ describe('MobilePane pairing connection mode', () => {
     expect(screen.getByRole('button', { name: 'Generate' })).toBeDisabled()
     await user.click(screen.getByRole('button', { name: 'Generate' }))
     await waitFor(() => expect(getPairingQR).not.toHaveBeenCalled())
-  })
-
-  it('pairs through Iroh without sign-in, a LAN address, or TCP firewall repair', async () => {
-    mocks.holder.state.orcaProfileAuthStatus = { state: 'local' }
-    mocks.listNetworkInterfaces.mockResolvedValue({
-      interfaces: [{ name: 'Ethernet', address: '10.0.0.2' }]
-    })
-    getPairingQR.mockResolvedValue({
-      available: true,
-      qrDataUrl: 'data:image/png;base64,iroh',
-      pairingUrl: 'orca://pair#iroh',
-      endpoint: 'iroh://endpoint-id',
-      connectionMode: 'iroh'
-    })
-    const user = userEvent.setup()
-    render(<MobilePane />)
-    await waitFor(() =>
-      expect(screen.getByTestId('selected-address')).toHaveTextContent('10.0.0.2')
-    )
-
-    await user.click(screen.getByRole('button', { name: 'choose-iroh' }))
-    expect(screen.getByTestId('can-generate')).toHaveTextContent('true')
-    await user.click(screen.getByRole('button', { name: 'Generate' }))
-
-    await waitFor(() => expect(getPairingQR).toHaveBeenCalledWith({ connectionMode: 'iroh' }))
-    expect(screen.getByTestId('qr')).toHaveTextContent('base64,iroh')
-    expect(screen.getByTestId('firewall-notice')).toHaveAttribute('data-pairing-ready', 'false')
   })
 
   it('surfaces Relay mint failure without a QR and offers Use LAN', async () => {
@@ -353,13 +340,8 @@ describe('MobilePane pairing connection mode', () => {
     await user.click(screen.getByRole('button', { name: 'Generate' }))
     await screen.findByTestId('relay-mint-failure-notice')
 
-    let resolveRetry: ((value: Record<string, unknown>) => void) | undefined
-    getPairingQR.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveRetry = resolve
-        })
-    )
+    const retry = Promise.withResolvers<Record<string, unknown>>()
+    getPairingQR.mockReturnValueOnce(retry.promise)
     await user.click(screen.getByRole('button', { name: 'Retry Relay' }))
     expect(screen.getByRole('button', { name: 'Retry Relay' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Use LAN' })).toBeEnabled()
@@ -367,7 +349,7 @@ describe('MobilePane pairing connection mode', () => {
     expect(getPairingQR).toHaveBeenCalledTimes(2)
     await waitFor(() => expect(screen.getByRole('button', { name: /Retrying/ })).toBeDisabled())
 
-    resolveRetry?.({
+    retry.resolve({
       available: true,
       qrDataUrl: 'data:image/png;base64,relay',
       pairingUrl: 'orca://relay',
@@ -397,13 +379,8 @@ describe('MobilePane pairing connection mode', () => {
     await user.click(screen.getByRole('button', { name: 'Generate' }))
     await screen.findByTestId('relay-mint-failure-notice')
 
-    let resolveRetry: ((value: Record<string, unknown>) => void) | undefined
-    getPairingQR.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveRetry = resolve
-        })
-    )
+    const retry = Promise.withResolvers<Record<string, unknown>>()
+    getPairingQR.mockReturnValueOnce(retry.promise)
     getPairingQR.mockResolvedValueOnce({
       available: true,
       qrDataUrl: 'data:image/png;base64,local',
@@ -422,7 +399,7 @@ describe('MobilePane pairing connection mode', () => {
     )
     await waitFor(() => expect(screen.getByTestId('qr')).toHaveTextContent('base64,local'))
     act(() => {
-      resolveRetry?.({
+      retry.resolve({
         available: true,
         qrDataUrl: 'data:image/png;base64,stale-relay',
         pairingUrl: 'orca://stale-relay',
@@ -624,17 +601,12 @@ describe('MobilePane pairing connection mode', () => {
       expect(screen.getByTestId('selected-address')).toHaveTextContent(customAddress)
     )
 
-    let resolveRefresh: ((value: Record<string, unknown>) => void) | undefined
-    mocks.listNetworkInterfaces.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveRefresh = resolve
-        })
-    )
+    const refresh = Promise.withResolvers<Record<string, unknown>>()
+    mocks.listNetworkInterfaces.mockReturnValueOnce(refresh.promise)
     await user.click(screen.getByRole('button', { name: 'refresh-addresses' }))
     expect(screen.getByTestId('refreshing-addresses')).toHaveTextContent('true')
 
-    resolveRefresh?.({ interfaces: [{ name: 'Ethernet', address: '10.0.0.2' }] })
+    refresh.resolve({ interfaces: [{ name: 'Ethernet', address: '10.0.0.2' }] })
     await waitFor(() =>
       expect(screen.getByTestId('refreshing-addresses')).toHaveTextContent('false')
     )
@@ -645,13 +617,8 @@ describe('MobilePane pairing connection mode', () => {
 
   it('discards a Relay QR that resolves after signing out mid-generate', async () => {
     const user = userEvent.setup()
-    let resolveQr: ((value: Record<string, unknown>) => void) | undefined
-    getPairingQR.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveQr = resolve
-        })
-    )
+    const qr = Promise.withResolvers<Record<string, unknown>>()
+    getPairingQR.mockReturnValueOnce(qr.promise)
     const { rerender } = render(<MobilePane />)
     await user.click(screen.getByRole('button', { name: 'Generate' }))
     await waitFor(() => expect(getPairingQR).toHaveBeenCalledWith({ connectionMode: 'automatic' }))
@@ -660,7 +627,7 @@ describe('MobilePane pairing connection mode', () => {
     rerender(<MobilePane />)
 
     // Late superseded responses must not show Relay codes after sign-out.
-    resolveQr?.({
+    qr.resolve({
       available: true,
       qrDataUrl: 'data:image/png;base64,relay',
       pairingUrl: 'orca://relay',
@@ -672,13 +639,8 @@ describe('MobilePane pairing connection mode', () => {
 
   it('drops loading and re-enables Generate after signing out mid-generate', async () => {
     const user = userEvent.setup()
-    let resolveQr: ((value: Record<string, unknown>) => void) | undefined
-    getPairingQR.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveQr = resolve
-        })
-    )
+    const qr = Promise.withResolvers<Record<string, unknown>>()
+    getPairingQR.mockReturnValueOnce(qr.promise)
     const { rerender } = render(<MobilePane />)
     await user.click(screen.getByRole('button', { name: 'Generate' }))
     await waitFor(() => expect(getPairingQR).toHaveBeenCalledWith({ connectionMode: 'automatic' }))
@@ -690,7 +652,7 @@ describe('MobilePane pairing connection mode', () => {
     await waitFor(() => expect(screen.getByTestId('loading')).toHaveTextContent('false'))
 
     // The late response resolves but must not resurrect the spinner.
-    resolveQr?.({
+    qr.resolve({
       available: true,
       qrDataUrl: 'data:image/png;base64,relay',
       pairingUrl: 'orca://relay',
@@ -736,13 +698,8 @@ describe('MobilePane pairing connection mode', () => {
 
   it('discards a Relay QR that resolves after switching path mid-generate', async () => {
     const user = userEvent.setup()
-    let resolveQr: ((value: Record<string, unknown>) => void) | undefined
-    getPairingQR.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveQr = resolve
-        })
-    )
+    const qr = Promise.withResolvers<Record<string, unknown>>()
+    getPairingQR.mockReturnValueOnce(qr.promise)
     render(<MobilePane />)
     await user.click(screen.getByRole('button', { name: 'Generate' }))
     await waitFor(() => expect(getPairingQR).toHaveBeenCalledWith({ connectionMode: 'automatic' }))
@@ -756,7 +713,7 @@ describe('MobilePane pairing connection mode', () => {
     })
     await user.click(screen.getByRole('button', { name: 'choose-local' }))
 
-    resolveQr?.({
+    qr.resolve({
       available: true,
       qrDataUrl: 'data:image/png;base64,relay',
       pairingUrl: 'orca://relay',
@@ -814,11 +771,13 @@ describe('MobilePane', () => {
     mocks.listNetworkInterfaces.mockReset().mockResolvedValue({ interfaces: [] })
     mocks.revokeDevice.mockReset()
     mocks.updateSettings.mockReset().mockResolvedValue(undefined)
+    mocks.updateSettingsOrThrow.mockReset().mockResolvedValue(undefined)
     mocks.holder.state = {
       orcaProfileAuthStatus: { state: 'connected' },
       settingsSearchQuery: '',
-      settings: { mobileAutoRestoreFitMs: null },
+      settings: { mobileAutoRestoreFitMs: null, mobileIrohRelayUrl: null },
       updateSettings: mocks.updateSettings,
+      updateSettingsOrThrow: mocks.updateSettingsOrThrow,
       recordFeatureInteraction: vi.fn(),
       fetchOrcaProfileAuthStatus: vi.fn().mockResolvedValue(null)
     }

@@ -25,6 +25,11 @@ export class RuntimeRpcShutdown extends RuntimeRpcMobilePairing {
   async stop(): Promise<void> {
     // Fence new exposure and await pending rebind before snapshotting transports, or late wide listeners can leak into cleared arrays (STA-2370).
     this.stopping = true
+    const onStop = this.onStop
+    this.onStop = null
+    onStop?.()
+    await this.pendingIrohTransport?.stop().catch(() => {})
+    await this.waitForIrohRelayBinding()
     const pendingExposure = this.networkExposurePromise
     if (pendingExposure) {
       await pendingExposure.catch(() => {
@@ -44,6 +49,8 @@ export class RuntimeRpcShutdown extends RuntimeRpcMobilePairing {
     this.detachPairedServerRows?.()
     this.detachPairedServerRows = null
     this.detachWebSocketWiring = null
+    this.detachIrohWiring = null
+    this.irohTransport = null
     const stopResults = await Promise.allSettled(
       transports.map(async (transport) => transport.stop())
     )

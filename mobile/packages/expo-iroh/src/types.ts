@@ -42,7 +42,7 @@ export type ExpoIrohEventMap = {
 }
 
 export type ExpoIrohNativeModule = {
-  irohStart(): Promise<IrohStartResult>
+  irohStart(homeRelayUrl: string | null): Promise<IrohStartResult>
   irohConnect(
     endpointId: string,
     relayUrl?: string | null,

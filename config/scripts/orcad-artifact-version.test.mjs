@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  ORCAD_IROH_LINUX_X64_GLIBC_ARTIFACTS,
   ORCAD_MOBILE_WEB_MANIFEST,
   ORCAD_NODE_RUNTIME_MARKER_FILENAME,
   ORCAD_SERVER_TARGET_FILENAME,
@@ -47,6 +48,22 @@ describe('standalone runtime version', () => {
     rmSync(binary)
     expect(() => computeOrcadFullVersion(dir, { target })).toThrow(orcadRipgrepArtifact(target))
   })
+
+  it.each(ORCAD_IROH_LINUX_X64_GLIBC_ARTIFACTS)(
+    'hashes the Iroh closure and rejects missing %s',
+    async (filename) => {
+      const target = 'linux-x64-glibc'
+      const dir = createArtifactDirectory(target)
+      const before = computeOrcadFullVersion(dir, { target })
+      writeFileSync(join(dir, filename), 'updated Iroh artifact')
+      const after = computeOrcadFullVersion(dir, { target })
+      expect(after).not.toBe(before)
+      expect(await readOrcadArtifactIdentity(dir)).toBe(after)
+      rmSync(join(dir, filename))
+      expect(() => computeOrcadFullVersion(dir, { target })).toThrow(filename)
+      await expect(readOrcadArtifactIdentity(dir)).rejects.toThrow(filename)
+    }
+  )
 
   it('changes when a page asset changes and rejects a missing one', () => {
     const target = 'linux-x64-glibc'

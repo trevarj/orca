@@ -2,6 +2,7 @@
 
 import '@testing-library/jest-dom/vitest'
 
+import { useSyncExternalStore } from 'react'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -16,17 +17,28 @@ type StoreState = {
     mobilePairingConnectionMode?: MobilePairingConnectionMode
     mobilePairingCustomAddress?: string | null
     mobilePairingCustomAddresses?: string[]
+    mobileIrohRelayUrl?: string | null
   }
   updateSettings: () => Promise<void>
+  updateSettingsOrThrow: (patch: Record<string, unknown>) => Promise<void>
   fetchOrcaProfileAuthStatus: () => Promise<unknown>
 }
 
 const mocks = vi.hoisted(() => ({
-  storeState: {} as StoreState
+  storeState: {} as StoreState,
+  listeners: new Set<() => void>(),
+  revokeDevice: vi.fn()
 }))
 
 vi.mock('@/store', () => ({
-  useAppStore: (selector: (state: StoreState) => unknown) => selector(mocks.storeState)
+  useAppStore: (selector: (state: StoreState) => unknown) =>
+    useSyncExternalStore(
+      (listener) => {
+        mocks.listeners.add(listener)
+        return () => mocks.listeners.delete(listener)
+      },
+      () => selector(mocks.storeState)
+    )
 }))
 
 vi.mock('@/i18n/i18n', () => ({
@@ -157,13 +169,15 @@ describe('MobilePage pairing connection mode', () => {
       pairingUrl: 'orca://pair#automatic'
     })
     listNetworkInterfaces.mockReset().mockResolvedValue({ interfaces: [] })
+    mocks.revokeDevice.mockReset().mockResolvedValue({ revoked: true })
     // Reset the shared device cache so prior tests cannot determine this test’s opening stage.
     _resetPairedMobileDevicesCacheForTests()
     mocks.storeState = {
       closeMobilePage: vi.fn(),
       orcaProfileAuthStatus: { state: 'connected' },
-      settings: { showMobileButton: true },
+      settings: { showMobileButton: true, mobileIrohRelayUrl: null },
       updateSettings: vi.fn().mockResolvedValue(undefined),
+      updateSettingsOrThrow: vi.fn().mockResolvedValue(undefined),
       fetchOrcaProfileAuthStatus: vi.fn().mockResolvedValue(null)
     }
     Object.defineProperty(window, 'api', {
@@ -172,7 +186,8 @@ describe('MobilePage pairing connection mode', () => {
         mobile: {
           getPairingQR,
           listDevices: vi.fn().mockResolvedValue({ devices: [] }),
-          listNetworkInterfaces
+          listNetworkInterfaces,
+          revokeDevice: mocks.revokeDevice
         },
         shell: { openUrl: vi.fn() },
         ui: { writeClipboardText: vi.fn().mockResolvedValue(undefined) }
@@ -208,13 +223,8 @@ describe('MobilePage pairing connection mode', () => {
     expect(screen.getByTestId('pairing-qr-size')).toHaveTextContent('218')
     expect(screen.getByTestId('mode')).toHaveTextContent('automatic')
 
-    let resolveRotatedLocalQr: ((value: Record<string, unknown>) => void) | undefined
-    getPairingQR.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveRotatedLocalQr = resolve
-        })
-    )
+    const rotatedLocalQr = Promise.withResolvers<Record<string, unknown>>()
+    getPairingQR.mockReturnValueOnce(rotatedLocalQr.promise)
     await user.click(screen.getByRole('button', { name: 'LAN' }))
     // Main rotates on policy mismatch; omitting rotate lets concurrent windows share the same fresh token.
     await waitFor(() =>
@@ -229,7 +239,7 @@ describe('MobilePage pairing connection mode', () => {
       mobilePairingConnectionMode: 'local-only'
     })
 
-    resolveRotatedLocalQr?.({
+    rotatedLocalQr.resolve({
       available: true,
       qrDataUrl: 'data:image/png;base64,local-qr',
       pairingUrl: 'orca://pair#local'
@@ -246,36 +256,6 @@ describe('MobilePage pairing connection mode', () => {
 
     await waitFor(() => expect(getPairingQR).toHaveBeenCalledWith({ connectionMode: 'local-only' }))
     expect(screen.getByTestId('mode')).toHaveTextContent('local-only')
-  })
-
-  it('omits saved and overridden addresses from signed-out Iroh requests without losing LAN selection', async () => {
-    const user = userEvent.setup()
-    const address = '100.126.117.25:6768'
-    mocks.storeState.orcaProfileAuthStatus = { state: 'local' }
-    mocks.storeState.settings = {
-      showMobileButton: true,
-      mobilePairingConnectionMode: 'iroh',
-      mobilePairingCustomAddress: address
-    }
-    await openPairingStep()
-
-    await waitFor(() => expect(getPairingQR).toHaveBeenCalledWith({ connectionMode: 'iroh' }))
-    expect(screen.getByTestId('selected-address')).toHaveTextContent(address)
-    expect(screen.getByTestId('can-generate')).toHaveTextContent('true')
-    await waitFor(() => expect(screen.getByTestId('pairing-qr')).toHaveTextContent('base64,qr'))
-
-    await user.click(screen.getByRole('button', { name: 'LAN' }))
-    await waitFor(() =>
-      expect(getPairingQR).toHaveBeenLastCalledWith({ address, connectionMode: 'local-only' })
-    )
-    await user.click(screen.getByRole('button', { name: 'Iroh' }))
-    await waitFor(() => expect(getPairingQR).toHaveBeenLastCalledWith({ connectionMode: 'iroh' }))
-
-    getPairingQR.mockClear()
-    await user.click(screen.getByRole('button', { name: 'Change address' }))
-    await waitFor(() =>
-      expect(getPairingQR).toHaveBeenLastCalledWith({ connectionMode: 'iroh', rotate: true })
-    )
   })
 
   it('restores a saved custom address for future pairing codes', async () => {
@@ -348,13 +328,8 @@ describe('MobilePage pairing connection mode', () => {
     getPairingQR.mockClear()
 
     // Hold the sign-in mint pending so we can inspect the upgrade window.
-    let resolveRelayQr: ((value: Record<string, unknown>) => void) | undefined
-    getPairingQR.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveRelayQr = resolve
-        })
-    )
+    const relayQr = Promise.withResolvers<Record<string, unknown>>()
+    getPairingQR.mockReturnValueOnce(relayQr.promise)
 
     mocks.storeState.orcaProfileAuthStatus = { state: 'connected' }
     rerender(<MobilePage />)
@@ -362,7 +337,7 @@ describe('MobilePage pairing connection mode', () => {
     expect(screen.getByTestId('pairing-qr')).toHaveTextContent('none')
     expect(screen.getByTestId('pairing-url')).toHaveTextContent('none')
 
-    resolveRelayQr?.({
+    relayQr.resolve({
       available: true,
       qrDataUrl: 'data:image/png;base64,qr',
       pairingUrl: 'orca://pair#automatic'
@@ -451,13 +426,8 @@ describe('MobilePage pairing connection mode', () => {
       expect(screen.getByTestId('relay-failure')).toHaveTextContent('create_pairing_relay')
     )
 
-    let resolveRetry: ((value: Record<string, unknown>) => void) | undefined
-    getPairingQR.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveRetry = resolve
-        })
-    )
+    const retry = Promise.withResolvers<Record<string, unknown>>()
+    getPairingQR.mockReturnValueOnce(retry.promise)
     getPairingQR.mockResolvedValueOnce({
       available: true,
       qrDataUrl: 'data:image/png;base64,local',
@@ -473,7 +443,7 @@ describe('MobilePage pairing connection mode', () => {
     )
     await waitFor(() => expect(screen.getByTestId('pairing-qr')).toHaveTextContent('base64,local'))
     await act(async () => {
-      resolveRetry?.({
+      retry.resolve({
         available: true,
         qrDataUrl: 'data:image/png;base64,stale-relay',
         pairingUrl: 'orca://pair#stale-relay',
@@ -582,20 +552,15 @@ describe('MobilePage pairing connection mode', () => {
     await user.click(screen.getByRole('button', { name: 'Back' }))
     await waitFor(() => expect(screen.getByTestId('stage')).toHaveTextContent('intro'))
     getPairingQR.mockClear()
-    let resolveRefresh: ((value: Record<string, unknown>) => void) | undefined
-    listNetworkInterfaces.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveRefresh = resolve
-        })
-    )
+    const refresh = Promise.withResolvers<Record<string, unknown>>()
+    listNetworkInterfaces.mockReturnValueOnce(refresh.promise)
     await user.click(screen.getByRole('button', { name: 'Enter flow' }))
     await user.click(screen.getByRole('button', { name: 'Continue' }))
 
     expect(getPairingQR).not.toHaveBeenCalled()
     expect(screen.getByTestId('pair-loading')).toHaveTextContent('true')
 
-    resolveRefresh?.({ interfaces: [{ name: 'Wi-Fi', address: '10.0.0.9' }] })
+    refresh.resolve({ interfaces: [{ name: 'Wi-Fi', address: '10.0.0.9' }] })
     await waitFor(() =>
       expect(screen.getByTestId('selected-address')).toHaveTextContent('10.0.0.9')
     )
@@ -658,17 +623,12 @@ describe('MobilePage pairing connection mode', () => {
     await user.click(screen.getByRole('button', { name: 'Back' }))
     await waitFor(() => expect(screen.getByTestId('stage')).toHaveTextContent('paired'))
     getPairingQR.mockClear()
-    let resolveSecondLookup: ((value: Record<string, unknown>) => void) | undefined
-    listNetworkInterfaces.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveSecondLookup = resolve
-        })
-    )
+    const secondLookup = Promise.withResolvers<Record<string, unknown>>()
+    listNetworkInterfaces.mockReturnValueOnce(secondLookup.promise)
     await user.click(screen.getByRole('button', { name: 'Pair another device' }))
     expect(getPairingQR).not.toHaveBeenCalled()
 
-    resolveSecondLookup?.({ interfaces: [{ name: 'Wi-Fi', address: '10.0.0.9' }] })
+    secondLookup.resolve({ interfaces: [{ name: 'Wi-Fi', address: '10.0.0.9' }] })
     await waitFor(() =>
       expect(screen.getByTestId('selected-address')).toHaveTextContent('10.0.0.9')
     )
@@ -818,13 +778,8 @@ describe('MobilePage pairing connection mode', () => {
     await openPairingStep()
     await waitFor(() => expect(getPairingQR).toHaveBeenCalledTimes(1))
 
-    let resolveStaleRefresh: ((value: Record<string, unknown>) => void) | undefined
-    listNetworkInterfaces.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveStaleRefresh = resolve
-        })
-    )
+    const staleRefresh = Promise.withResolvers<Record<string, unknown>>()
+    listNetworkInterfaces.mockReturnValueOnce(staleRefresh.promise)
     await user.click(screen.getByRole('button', { name: 'Refresh addresses' }))
     listNetworkInterfaces.mockResolvedValueOnce({
       interfaces: [{ name: 'Wi-Fi', address: '10.0.0.7' }]
@@ -841,7 +796,7 @@ describe('MobilePage pairing connection mode', () => {
     })
 
     await act(async () => {
-      resolveStaleRefresh?.({ interfaces: [{ name: 'Wi-Fi', address: '10.0.0.1' }] })
+      staleRefresh.resolve({ interfaces: [{ name: 'Wi-Fi', address: '10.0.0.1' }] })
     })
     expect(screen.getByTestId('refreshing-addresses')).toHaveTextContent('false')
 

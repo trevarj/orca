@@ -56,7 +56,7 @@ export class RpcClientSocketFactory {
       'info',
       this.options.getReconnectAttempt() > 0
         ? `Reconnecting (attempt ${this.options.getReconnectAttempt() + 1})`
-        : 'Opening WebSocket',
+        : 'Opening transport',
       redactSocketEndpoint(this.options.endpoint)
     )
     return new RpcClientSocketSession({

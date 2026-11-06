@@ -15,7 +15,11 @@ export class DirectConnectionLog {
     endpoint: string,
     private readonly sink?: ConnectionLogSink
   ) {
-    this.path = isTailscaleEndpoint(endpoint) ? 'tailscale' : 'lan'
+    this.path = endpoint.startsWith('iroh:')
+      ? 'iroh'
+      : isTailscaleEndpoint(endpoint)
+        ? 'tailscale'
+        : 'lan'
   }
 
   emit = (

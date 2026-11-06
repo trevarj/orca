@@ -21,9 +21,8 @@ export function inferIrohPathMode(host: {
   return host.relay ? 'fallback' : 'primary-off-lan'
 }
 
-// Why: native module is iOS-first; Android methods reject with iroh_android_not_implemented.
 export function isIrohNativePlatform(): boolean {
-  return Platform.OS === 'ios'
+  return Platform.OS === 'ios' || Platform.OS === 'android'
 }
 
 /**

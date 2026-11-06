@@ -10,6 +10,7 @@ import {
   normalizeMobilePairingCustomAddresses
 } from '../../../shared/mobile-pairing-custom-address'
 import { normalizeSourceControlGroupOrder } from '../../../shared/source-control-group-order'
+import { parseIrohRelayUrl } from '../../../shared/iroh-relay-preference'
 import { normalizeProjectGroups } from '../../../shared/project-groups'
 import { normalizeDisabledTuiAgents } from '../../../shared/tui-agent-selection'
 import { hasUnsupportedTuiAgentArgs } from '../../../shared/tui-agent-launch-defaults'
@@ -55,6 +56,7 @@ export type PreparedLoadedProfileSettings = {
   migratedWindowsRuntimeDefault: GlobalSettings['localWindowsRuntimeDefault']
   migratedLocalAccountRuntime: GlobalSettings['localAccountRuntime']
   loadedCompactWorktreeCards: boolean
+  mobileIrohRelayUrl: GlobalSettings['mobileIrohRelayUrl']
   mobilePairingCustomAddress: GlobalSettings['mobilePairingCustomAddress']
   mobilePairingCustomAddresses: GlobalSettings['mobilePairingCustomAddresses']
   normalizedNotifications: GlobalSettings['notifications']
@@ -210,6 +212,18 @@ export function prepareLoadedProfileSettings(
     parsed.settings?.compactWorktreeCards ??
     parsed.settings?.experimentalCompactWorktreeCards ??
     defaults.settings.compactWorktreeCards
+  let mobileIrohRelayUrl: string | null = null
+  try {
+    mobileIrohRelayUrl = parseIrohRelayUrl(parsed.settings?.mobileIrohRelayUrl)
+  } catch {
+    // Corrupt saved preferences reset to Automatic; new writes reject instead.
+  }
+  if (
+    parsed.settings?.mobileIrohRelayUrl !== undefined &&
+    parsed.settings.mobileIrohRelayUrl !== mobileIrohRelayUrl
+  ) {
+    markNeedsSave()
+  }
   const mobilePairingCustomAddress = normalizeMobilePairingCustomAddress(
     parsed.settings?.mobilePairingCustomAddress
   )
@@ -272,6 +286,7 @@ export function prepareLoadedProfileSettings(
     migratedWindowsRuntimeDefault,
     migratedLocalAccountRuntime,
     loadedCompactWorktreeCards,
+    mobileIrohRelayUrl,
     mobilePairingCustomAddress,
     mobilePairingCustomAddresses,
     normalizedNotifications,

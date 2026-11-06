@@ -106,6 +106,36 @@ describe('packaged ripgrep storage', () => {
     )
   })
 
+  it('requires explicit targets to finalize the fork Linux x64-only template', async () => {
+    const f = await fixture()
+    for (const target of Object.keys(f.manifest.targets)) {
+      if (target === 'linux-x64-glibc') {
+        continue
+      }
+      delete f.manifest.targets[target]
+      await rm(join(f.templateDir, 'targets', target), { recursive: true })
+    }
+    await writeFile(f.manifestPath, JSON.stringify(f.manifest))
+    await expect(
+      finalizePackagedOrcadTemplate(f.resourcesDir, { platform: 'linux' })
+    ).rejects.toThrow('target manifest inventory mismatch')
+    await finalizePackagedOrcadTemplate(f.resourcesDir, {
+      platform: 'linux',
+      targets: ['linux-x64-glibc']
+    })
+    expect(() => verifyPackagedOrcadTemplate(f.resourcesDir, ['linux-x64-glibc'])).not.toThrow()
+    const manifest = JSON.parse(await readFile(f.manifestPath, 'utf8'))
+    expect(Object.keys(manifest.targets)).toEqual(['linux-x64-glibc'])
+    expect(manifest.targets['linux-x64-glibc'].packagedRipgrep).toBe(true)
+    await writeFile(join(f.resourcesDir, 'ripgrep/linux-x64/rg'), 'tampered')
+    await expect(
+      finalizePackagedOrcadTemplate(f.resourcesDir, {
+        platform: 'linux',
+        targets: ['linux-x64-glibc']
+      })
+    ).rejects.toThrow('checksum mismatch')
+  })
+
   it('keeps binaries that differ and never removes Darwin signing inputs', async () => {
     const f = await fixture()
     const desktop = join(f.resourcesDir, 'ripgrep/linux-arm64/rg')

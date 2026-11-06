@@ -92,6 +92,12 @@ export class RuntimeRpcMobilePairing extends RuntimeRpcPairing {
   ): Promise<MobilePairingOffer> {
     // Renderer input is untrusted; only known modes may suppress Relay provisioning.
     const connectionMode = parseMobilePairingConnectionMode(args.connectionMode)
+    if (connectionMode === 'iroh') {
+      await this.waitForIrohRelayBinding()
+      if (generation !== this.mobilePairingOfferGeneration) {
+        return this.relayPairingRequestSuperseded()
+      }
+    }
     const pending = this.deviceRegistry?.getPendingDevice('mobile')
     // Rotate when connection policy changes so old QR credentials retain no new-policy authority.
     const switchingPendingMode =

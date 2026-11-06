@@ -22,6 +22,7 @@ const directOffer: PairingOffer = {
 }
 const irohOffer: PairingOffer = {
   ...directOffer,
+  endpoint: `iroh://${'a'.repeat(64)}`,
   iroh: {
     endpointId: 'a'.repeat(64),
     relayUrl: 'https://use1-1.relay.n0.iroh.network./',
@@ -272,51 +273,88 @@ describe('pre-profile pairing coordinator', () => {
     expect(deps.savePairedHost).toHaveBeenCalledOnce()
   })
 
-  it('pairs an iroh offer over iroh only — no ws dial', async () => {
-    const events: string[] = []
-    const wsClient = fakeClient([])
-    const irohClient = fakeClient([success({ version: '1.0.0' })])
-    const deps = dependencies(wsClient, events)
-    deps.connectIroh.mockImplementation(() => (events.push('connect-iroh'), irohClient))
+  it.each(['android', 'ios'])(
+    'pairs an iroh offer on %s over iroh only — no ws dial',
+    async (platform) => {
+      const events: string[] = []
+      const wsClient = fakeClient([])
+      const irohClient = fakeClient([success({ version: '1.0.0' })])
+      const deps = dependencies(wsClient, events)
+      deps.platform = platform
+      deps.connectIroh.mockImplementation(() => (events.push('connect-iroh'), irohClient))
 
-    const attempt = startPreProfilePairing({
-      offer: irohOffer,
-      timeoutMs: 5_000,
-      dependencies: deps
-    })
-
-    await expect(attempt.result).resolves.toEqual({ hostId: `host-${now}` })
-    expect(deps.connectDirect).not.toHaveBeenCalled()
-    expect(deps.connectIroh).toHaveBeenCalledWith(
-      expect.objectContaining({
-        desktopEndpointId: irohOffer.iroh!.endpointId,
-        dialHints: {
-          relayUrl: irohOffer.iroh!.relayUrl,
-          directAddresses: irohOffer.iroh!.directAddresses
-        },
-        deviceToken: irohOffer.deviceToken,
-        publicKeyB64: irohOffer.publicKeyB64
+      const attempt = startPreProfilePairing({
+        offer: irohOffer,
+        timeoutMs: 5_000,
+        dependencies: deps
       })
-    )
-    expect(deps.savePairedHost).toHaveBeenCalledWith(
-      expect.objectContaining({ iroh: irohOffer.iroh })
-    )
-    expect(events).toEqual(['connect-iroh', 'save-host', 'record-descriptor'])
-  })
 
-  it('falls back to the ws dial when the iroh native module is unavailable', async () => {
+      await expect(attempt.result).resolves.toEqual({ hostId: `host-${now}` })
+      expect(deps.connectDirect).not.toHaveBeenCalled()
+      expect(deps.connectIroh).toHaveBeenCalledWith(
+        expect.objectContaining({
+          desktopEndpointId: irohOffer.iroh!.endpointId,
+          dialHints: {
+            relayUrl: irohOffer.iroh!.relayUrl,
+            directAddresses: irohOffer.iroh!.directAddresses
+          },
+          deviceToken: irohOffer.deviceToken,
+          publicKeyB64: irohOffer.publicKeyB64
+        })
+      )
+      expect(deps.savePairedHost).toHaveBeenCalledWith(
+        expect.objectContaining({ iroh: irohOffer.iroh })
+      )
+      expect(events).toEqual(['connect-iroh', 'save-host', 'record-descriptor'])
+    }
+  )
+
+  it.each(['android', 'ios'])(
+    'rejects an unsupported iroh QR on %s without dialing WebSocket or saving a host',
+    async (platform) => {
+      const events: string[] = []
+      const deps = dependencies(fakeClient([]), events)
+      deps.platform = platform
+
+      const attempt = startPreProfilePairing({
+        offer: irohOffer,
+        timeoutMs: 5_000,
+        dependencies: deps
+      })
+
+      await expect(attempt.result).rejects.toBeInstanceOf(Error)
+      expect(deps.connectIroh).toHaveBeenCalledOnce()
+      expect(deps.connectDirect).not.toHaveBeenCalled()
+      expect(deps.savePairedHost).not.toHaveBeenCalled()
+      expect(events).toEqual([])
+    }
+  )
+
+  it.each([
+    ['android', 'ws://192.168.1.10:6768'],
+    ['ios', 'ws://192.168.1.10:6768'],
+    ['android', 'wss://desktop.invalid'],
+    ['ios', 'wss://desktop.invalid']
+  ])('falls back to a legacy %s offer with endpoint %s', async (platform, endpoint) => {
     const events: string[] = []
     const client = fakeClient([success({ version: '1.0.0' })])
     const deps = dependencies(client, events)
+    deps.platform = platform
 
     const attempt = startPreProfilePairing({
-      offer: irohOffer,
+      offer: { ...irohOffer, endpoint },
       timeoutMs: 5_000,
       dependencies: deps
     })
 
     await expect(attempt.result).resolves.toEqual({ hostId: `host-${now}` })
     expect(deps.connectIroh).toHaveBeenCalledOnce()
+    expect(deps.connectDirect).toHaveBeenCalledWith(
+      endpoint,
+      irohOffer.deviceToken,
+      irohOffer.publicKeyB64,
+      expect.any(Object)
+    )
     expect(events).toEqual(['connect', 'save-host', 'record-descriptor'])
   })
 

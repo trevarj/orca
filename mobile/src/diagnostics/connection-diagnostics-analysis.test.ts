@@ -40,20 +40,35 @@ describe('diagnoseConnection', () => {
     })
   })
 
-  it('identifies the direct Tailscale timeout while Relay recovery is pending', () => {
-    expect(
-      diagnoseConnection({
-        endpoint: 'ws://100.88.90.25:6768',
-        state: 'reconnecting',
-        activePath: 'tailscale',
-        pendingPath: 'relay',
-        entries: [event('WebSocket connect timeout')]
+  it.each(['WebSocket connect timeout', 'Transport connect timeout'])(
+    'classifies %s while Relay recovery is pending',
+    (message) => {
+      expect(
+        diagnoseConnection({
+          endpoint: 'ws://100.88.90.25:6768',
+          state: 'reconnecting',
+          activePath: 'tailscale',
+          pendingPath: 'relay',
+          entries: [event(message)]
+        })
+      ).toEqual({
+        likelyCause: 'The saved Tailscale endpoint did not answer before the connection timeout.',
+        nextStep: 'Relay recovery is in progress; keep Orca open while it retries.',
+        reportability: 'none'
       })
-    ).toEqual({
-      likelyCause: 'The saved Tailscale endpoint did not answer before the connection timeout.',
-      nextStep: 'Relay recovery is in progress; keep Orca open while it retries.',
-      reportability: 'none'
-    })
+    }
+  )
+
+  it('uses an Iroh timeout path ahead of the saved endpoint', () => {
+    const args = {
+      state: 'reconnecting' as const,
+      entries: [
+        { ...event('connect-timeout'), code: 'connect-timeout' as const, path: 'iroh' as const }
+      ]
+    }
+    const diagnosis = diagnoseConnection({ ...args, endpoint: 'ws://100.88.90.25:6768' })
+    expect(diagnosis).toEqual(diagnoseConnection({ ...args, endpoint: 'iroh://desktop-endpoint' }))
+    expect(diagnosis.reportability).toBe('none')
   })
 
   it('identifies an authenticated Relay liveness failure', () => {
@@ -174,26 +189,29 @@ describe('diagnoseConnection', () => {
     ).toBe('none')
   })
 
-  it('uses a structured direct liveness path ahead of the current active path', () => {
-    expect(
-      diagnoseConnection({
-        endpoint: 'ws://192.168.1.2:6768',
-        state: 'reconnecting',
-        activePath: 'relay',
-        entries: [
-          {
-            ...event('Connection health check failed'),
-            code: 'liveness-timeout',
-            path: 'lan'
-          }
-        ]
+  it.each(['lan', 'tailscale', 'iroh'] as const)(
+    'uses structured %s liveness evidence ahead of the current active path',
+    (path) => {
+      expect(
+        diagnoseConnection({
+          endpoint: 'ws://192.168.1.2:6768',
+          state: 'reconnecting',
+          activePath: 'relay',
+          entries: [
+            {
+              ...event('Connection health check failed'),
+              code: 'liveness-timeout',
+              path
+            }
+          ]
+        })
+      ).toEqual({
+        likelyCause: 'The connected host stopped answering authenticated health checks.',
+        nextStep: 'Orca closed the stale session and started recovery.',
+        reportability: 'none'
       })
-    ).toEqual({
-      likelyCause: 'The connected host stopped answering authenticated health checks.',
-      nextStep: 'Orca closed the stale session and started recovery.',
-      reportability: 'none'
-    })
-  })
+    }
+  )
 
   it('does not reuse an earlier endpoint failure after a delayed deadline', () => {
     expect(

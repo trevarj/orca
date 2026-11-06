@@ -429,8 +429,9 @@ describe('OrcaRuntimeRpcServer', () => {
       enableWebSocket: true,
       wsPort: 0,
       irohBindEndpoint: async () => ({
-        // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: The server calls only acceptNext/close/id on the bound endpoint, which the double provides.
+        // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: The double supplies the endpoint operations consumed by IrohTransport.
         endpoint: {
+          online: async () => {},
           acceptNext: async () => null,
           close: async () => {},
           id: () => ({ toString: () => endpointId })

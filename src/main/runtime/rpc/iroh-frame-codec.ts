@@ -28,45 +28,48 @@ export function createFrameDecoder(callbacks: FrameDecoderCallbacks): {
   feed: (chunk: Uint8Array) => void
   reset: () => void
 } {
-  let buffer = Buffer.alloc(0)
-  let expectedLength: number | null = null
+  const header = Buffer.allocUnsafe(IROH_LENGTH_PREFIX_BYTES)
+  let headerBytes = 0
+  let payload: Uint8Array | null = null
+  let payloadBytes = 0
 
   return {
     feed(chunk: Uint8Array): void {
-      if (chunk.byteLength === 0) {
-        return
-      }
-      buffer = Buffer.concat([
-        buffer,
-        Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
-      ])
-      while (true) {
-        if (expectedLength === null) {
-          if (buffer.byteLength < IROH_LENGTH_PREFIX_BYTES) {
+      let offset = 0
+      while (offset < chunk.byteLength) {
+        if (payload === null) {
+          const count = Math.min(IROH_LENGTH_PREFIX_BYTES - headerBytes, chunk.byteLength - offset)
+          header.set(chunk.subarray(offset, offset + count), headerBytes)
+          headerBytes += count
+          offset += count
+          if (headerBytes < IROH_LENGTH_PREFIX_BYTES) {
             return
           }
-          expectedLength = buffer.readUInt32BE(0)
-          buffer = buffer.subarray(IROH_LENGTH_PREFIX_BYTES)
-          if (expectedLength > IROH_MAX_FRAME_BYTES) {
-            const oversize = expectedLength
-            expectedLength = null
-            buffer = Buffer.alloc(0)
-            callbacks.onOversize(oversize)
+          const length = header.readUInt32BE(0)
+          headerBytes = 0
+          if (length > IROH_MAX_FRAME_BYTES) {
+            callbacks.onOversize(length)
             return
           }
+          // Allocate once per bounded frame, not once per network fragment.
+          payload = new Uint8Array(length)
         }
-        if (buffer.byteLength < expectedLength) {
-          return
+        const count = Math.min(payload.byteLength - payloadBytes, chunk.byteLength - offset)
+        payload.set(chunk.subarray(offset, offset + count), payloadBytes)
+        payloadBytes += count
+        offset += count
+        if (payloadBytes === payload.byteLength) {
+          const complete = payload
+          payload = null
+          payloadBytes = 0
+          callbacks.onFrame(complete)
         }
-        const payload = buffer.subarray(0, expectedLength)
-        buffer = buffer.subarray(expectedLength)
-        expectedLength = null
-        callbacks.onFrame(new Uint8Array(payload))
       }
     },
     reset(): void {
-      buffer = Buffer.alloc(0)
-      expectedLength = null
+      headerBytes = 0
+      payload = null
+      payloadBytes = 0
     }
   }
 }

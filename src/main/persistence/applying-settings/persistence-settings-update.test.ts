@@ -133,6 +133,56 @@ describe('Store', () => {
     expect(updated.prBotAuthorOverrides[499]).toBe('bot-0499')
   })
 
+  it('persists canonical iroh relay selection and Automatic across profile reloads', async () => {
+    const store = await createStore()
+    store.updateSettings({ mobileIrohRelayUrl: ' HTTPS://Relay.Example:443 ' })
+    await store.flushPendingOrThrowAsync()
+    await closeTestStores()
+
+    const reloaded = await createStore()
+    expect(reloaded.getSettings().mobileIrohRelayUrl).toBe('https://relay.example/')
+    reloaded.updateSettings({ mobileIrohRelayUrl: '   ' })
+    await reloaded.flushPendingOrThrowAsync()
+    await closeTestStores()
+
+    expect((await createStore()).getSettings().mobileIrohRelayUrl).toBeNull()
+  })
+
+  it.each([
+    'https://private-user:private-token@relay.example/',
+    'http://relay.example/',
+    'https://relay.example/private',
+    'https://relay.example/?private-token',
+    'https://relay.example:#private-token',
+    42
+  ])('rejects invalid iroh relay writes without mutating the profile: %s', async (invalid) => {
+    const store = await createStore()
+    store.updateSettings({ mobileIrohRelayUrl: 'https://saved.example/' })
+    await store.flushPendingOrThrowAsync()
+    const machineName = store.getSettings().machineName
+    const changed = vi.fn()
+    store.onSettingsChanged(changed)
+
+    expect(() =>
+      store.updateSettings(
+        { mobileIrohRelayUrl: invalid as never, machineName: 'must-not-save' },
+        { notifyListeners: true }
+      )
+    ).toThrowError()
+    expect(store.getSettings()).toMatchObject({
+      mobileIrohRelayUrl: 'https://saved.example/',
+      machineName
+    })
+    expect(changed).not.toHaveBeenCalled()
+    await store.flushPendingOrThrowAsync()
+    await closeTestStores()
+
+    expect((await createStore()).getSettings()).toMatchObject({
+      mobileIrohRelayUrl: 'https://saved.example/',
+      machineName
+    })
+  })
+
   it('normalizes custom mobile pairing addresses on load and every settings write', async () => {
     writeDataFile({
       settings: {

@@ -5,7 +5,7 @@ const notImplemented = async (): Promise<never> => {
 }
 
 const ExpoIrohModule: ExpoIrohNativeModule = {
-  irohStart: notImplemented,
+  irohStart: (_homeRelayUrl: string | null) => notImplemented(),
   irohConnect: notImplemented,
   irohSend: notImplemented,
   irohPathInfo: notImplemented,

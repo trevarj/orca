@@ -11,6 +11,7 @@ import type {
 import type { MobilePairingConnectionMode } from '../../../../shared/mobile-pairing-connection-mode'
 import { MobilePairingPathOption } from './MobilePairingPathOption'
 import { MobileRelaySignInPanel } from './MobileRelaySignInPanel'
+import { MobileIrohRelaySettingField } from './MobileIrohRelaySettingField'
 
 function relayStatusLabel(status: MobileRelayStatus): string {
   if (status === 'registered') {
@@ -66,6 +67,7 @@ export function MobilePairingConnectionOptions({
   relayMintRetrying?: boolean
 }): React.JSX.Element {
   const authStatus = useAppStore((state) => state.orcaProfileAuthStatus)
+  const irohRelayUrl = useAppStore((state) => state.settings?.mobileIrohRelayUrl ?? null)
   const [relayStatus, setRelayStatus] = useState<MobileRelayStatus>('offline')
   const [irohBound, setIrohBound] = useState(false)
   const [relayCellUrl, setRelayCellUrl] = useState<string | undefined>(undefined)
@@ -102,7 +104,7 @@ export function MobilePairingConnectionOptions({
       return
     }
     event.preventDefault()
-    const currentIndex = Math.max(0, MODE_ORDER.indexOf(value))
+    const currentIndex = MODE_ORDER.findIndex((mode) => optionRefs.current[mode] === target)
     const delta = event.key === 'ArrowUp' || event.key === 'ArrowLeft' ? -1 : 1
     for (let step = 1; step < MODE_ORDER.length; step++) {
       const raw = (currentIndex + delta * step) % MODE_ORDER.length
@@ -149,9 +151,14 @@ export function MobilePairingConnectionOptions({
 
   useEffect(() => {
     let active = true
-    // Why: iroh may still be binding when Settings opens — poll until bound so
-    // the option doesn't stay "Unavailable" for the lifetime of the pane.
+    let checking = false
+    setIrohBound(false)
+    // A relay save replaces the endpoint; restart observation even after an earlier successful bind.
     const check = (): void => {
+      if (checking) {
+        return
+      }
+      checking = true
       void window.api.mobile
         .getIrohStatus()
         .then((status) => {
@@ -167,6 +174,9 @@ export function MobilePairingConnectionOptions({
             setIrohBound(false)
           }
         })
+        .finally(() => {
+          checking = false
+        })
     }
     const interval = window.setInterval(check, 3000)
     check()
@@ -174,7 +184,7 @@ export function MobilePairingConnectionOptions({
       active = false
       window.clearInterval(interval)
     }
-  }, [])
+  }, [irohRelayUrl])
 
   return (
     <div className={cn('space-y-2', compact && 'space-y-1.5')}>
@@ -288,7 +298,7 @@ export function MobilePairingConnectionOptions({
             irohDisabled
               ? translate(
                   'auto.components.settings.MobilePairingConnectionOptions.irohUnavailable',
-                  'Transport failed to bind. Restart Orca, or check logs.'
+                  'Transport is unavailable. Choose another home relay or check logs.'
                 )
               : translate(
                   'auto.components.settings.MobilePairingConnectionOptions.irohDescription',
@@ -307,6 +317,7 @@ export function MobilePairingConnectionOptions({
           }
         />
       </div>
+      <MobileIrohRelaySettingField />
     </div>
   )
 }

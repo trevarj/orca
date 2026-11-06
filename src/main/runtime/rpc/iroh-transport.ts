@@ -1,8 +1,9 @@
 // Iroh mobile transport: public-key dial + length-prefixed E2EE frames.
 // Liveness: rely on QUIC keepalive for the path; reap connections idle for 30s
 // (no inbound frames) instead of WS ping/pong via RemoteRuntimeServerHeartbeat.
-import type { Endpoint } from '@number0/iroh'
+import type { Connection, Endpoint } from '@number0/iroh'
 import type { WebSocket } from 'ws'
+import { parseIrohRelayUrl } from '../../../shared/iroh-relay-preference'
 import type { RpcTransport } from './transport'
 import type { MobileSocketTransport } from './mobile-socket-wiring'
 import {
@@ -28,12 +29,14 @@ type MessageHandler = {
 
 export type IrohTransportOptions = {
   userDataPath: string
+  relayUrl?: string | null
   preAuthTimeoutMs?: number
   idleTimeoutMs?: number
   // Why: tests inject a fake bind so CI never loads the native module or opens UDP.
   bindEndpoint?: (
     secretKey: number[],
-    alpn: number[]
+    alpn: number[],
+    relayUrl: string | null
   ) => Promise<{
     endpoint: Endpoint
     endpointId: string
@@ -42,6 +45,7 @@ export type IrohTransportOptions = {
 
 export class IrohTransport implements RpcTransport, MobileSocketTransport {
   private readonly userDataPath: string
+  private readonly relayUrl: IrohTransportOptions['relayUrl']
   private readonly bindEndpoint: IrohTransportOptions['bindEndpoint']
   private endpoint: Endpoint | null = null
   private endpointIdValue: string | null = null
@@ -50,13 +54,17 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
     | ((clientId: string | null, ws: WebSocket, hasOtherConnections: boolean) => void)
     | null = null
   private readonly sockets = new Set<IrohFramedSocket>()
+  private readonly connections = new Set<Connection>()
   private readonly clientIds = new Map<IrohFramedSocket, string>()
   private readonly timers: IrohConnectionTimers
-  private acceptLoopPromise: Promise<void> | null = null
-  private stopped = true
+  private readonly shutdown = new AbortController()
+  private startPromise: Promise<void> | null = null
+  private stopPromise: Promise<void> | null = null
+  private cancelStart: (() => void) | null = null
 
   constructor(options: IrohTransportOptions) {
     this.userDataPath = options.userDataPath
+    this.relayUrl = options.relayUrl
     this.timers = new IrohConnectionTimers(
       options.preAuthTimeoutMs ?? PRE_AUTH_TIMEOUT_MS,
       options.idleTimeoutMs ?? IDLE_TIMEOUT_MS
@@ -71,7 +79,7 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
   /** Dial hints for pairing offers; null until the endpoint is online. */
   endpointDialHints(): { relayUrl: string | null; directAddresses: string[] } | null {
     const endpoint = this.endpoint
-    if (!endpoint) {
+    if (!endpoint || !this.endpointIdValue) {
       return null
     }
     try {
@@ -117,60 +125,100 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
   }
 
   async start(): Promise<void> {
-    if (this.endpoint) {
+    if (this.shutdown.signal.aborted) {
       return
     }
-    this.stopped = false
+    if (!this.startPromise) {
+      const startup = Promise.withResolvers<void>()
+      this.startPromise = startup.promise
+      this.cancelStart = startup.resolve
+      void this.startEndpoint().then(startup.resolve, startup.reject)
+    }
+    return this.startPromise
+  }
+
+  private async startEndpoint(): Promise<void> {
+    const relayUrl = parseIrohRelayUrl(this.relayUrl)
     const secretKey = loadOrCreateIrohEndpointSecret(this.userDataPath)
     const alpn = Array.from(Buffer.from(IROH_MOBILE_RPC_ALPN))
 
     let endpoint: Endpoint
-    let endpointId: string
+    let endpointId: string | undefined
     if (this.bindEndpoint) {
-      const bound = await this.bindEndpoint(secretKey, alpn)
+      const bound = await this.bindEndpoint(secretKey, alpn, relayUrl)
       endpoint = bound.endpoint
       endpointId = bound.endpointId
     } else {
-      // Why: lazy import keeps the native module out of processes that never bind.
-      const { Endpoint } = await import('@number0/iroh')
-      endpoint = await Endpoint.bind({ secretKey, alpns: [alpn] })
-      try {
-        await endpoint.online()
-        endpointId = endpoint.id().toString()
-      } catch (error) {
-        // Why: bind() already opened the UDP socket, and this.endpoint is still
-        // null — stop() would find nothing to close and leak the port.
-        await endpoint.close().catch(() => {})
-        throw error
+      // Why: static imports would load the native addon even in processes that never bind.
+      const { Endpoint, RelayMode } = await import('@number0/iroh')
+      if (this.shutdown.signal.aborted) {
+        return
       }
+      endpoint = await Endpoint.bind(
+        { secretKey, alpns: [alpn] },
+        relayUrl ? RelayMode.customFromUrls([relayUrl]) : undefined
+      )
     }
-    // Why: a concurrent stop() saw endpoint === null and had nothing to close.
-    if (this.stopped) {
+    if (this.shutdown.signal.aborted) {
       await endpoint.close().catch(() => {})
       return
     }
+    // Own the endpoint before online(), which may never settle on an unavailable relay.
     this.endpoint = endpoint
-    this.endpointIdValue = endpointId
-
-    console.info(`[iroh-transport] endpoint bound id=${this.endpointIdValue}`)
-    this.acceptLoopPromise = runIrohAcceptLoop({
-      endpoint,
-      isStopped: () => this.stopped,
-      atCapacity: () => this.sockets.size >= MAX_IROH_CONNECTIONS,
-      onConnection: (socket, bi) => this.handleConnection(socket, bi)
-    })
+    try {
+      await endpoint.online()
+      if (this.shutdown.signal.aborted) {
+        return
+      }
+      this.endpointIdValue = endpointId ?? endpoint.id().toString()
+      console.info(`[iroh-transport] endpoint bound id=${this.endpointIdValue}`)
+      void runIrohAcceptLoop({
+        endpoint,
+        signal: this.shutdown.signal,
+        connections: this.connections,
+        atCapacity: (pending) => this.sockets.size + pending >= MAX_IROH_CONNECTIONS,
+        onConnection: (socket, bi) => this.handleConnection(socket, bi)
+      })
+    } catch (error) {
+      if (this.endpoint === endpoint) {
+        this.endpoint = null
+        this.endpointIdValue = null
+        await endpoint.close().catch(() => {})
+      }
+      if (!this.shutdown.signal.aborted) {
+        throw error
+      }
+    }
   }
 
-  async stop(): Promise<void> {
-    this.stopped = true
+  stop(): Promise<void> {
+    if (!this.stopPromise) {
+      const stopped = Promise.withResolvers<void>()
+      this.stopPromise = stopped.promise
+      void this.stopEndpoint().then(stopped.resolve, stopped.reject)
+    }
+    return this.stopPromise
+  }
+
+  private async stopEndpoint(): Promise<void> {
+    const endpoint = this.endpoint
+    this.endpoint = null
+    this.endpointIdValue = null
+    this.shutdown.abort()
+    this.cancelStart?.()
     for (const socket of Array.from(this.sockets)) {
       socket.terminate()
     }
     this.sockets.clear()
     this.clientIds.clear()
-    const endpoint = this.endpoint
-    this.endpoint = null
-    this.endpointIdValue = null
+    for (const connection of this.connections) {
+      try {
+        connection.close(0n, [])
+      } catch {
+        // Already closed.
+      }
+    }
+    this.connections.clear()
     if (endpoint) {
       try {
         await endpoint.close()
@@ -178,16 +226,16 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
         // Endpoint may already be closed.
       }
     }
-    if (this.acceptLoopPromise) {
-      await this.acceptLoopPromise.catch(() => {})
-      this.acceptLoopPromise = null
-    }
   }
 
   private handleConnection(
     socket: IrohFramedSocket,
     bi: { recv: { read: (n: number) => Promise<number[]> } }
   ): void {
+    if (this.shutdown.signal.aborted) {
+      socket.terminate()
+      return
+    }
     let finalized = false
     let closeReason = 'peer'
     const finalize = (reason?: string): void => {
@@ -234,6 +282,9 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
 
     const decoder = createFrameDecoder({
       onFrame: (payload) => {
+        if (this.shutdown.signal.aborted || socket.readyState !== socket.OPEN) {
+          return
+        }
         this.timers.armIdle(socket)
         const message = decodeIrohFramePayload(payload)
         this.messageHandler?.(
@@ -258,13 +309,13 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
 
   private async readLoop(
     bi: { recv: { read: (n: number) => Promise<number[]> } },
-    decoder: ReturnType<typeof createFrameDecoder>,
+    decoder: { feed: (chunk: Uint8Array) => void },
     socket: IrohFramedSocket
   ): Promise<void> {
     try {
       while (socket.readyState === socket.OPEN) {
         const chunk = await bi.recv.read(WRITE_CHUNK_BYTES)
-        if (!chunk || chunk.length === 0) {
+        if (this.shutdown.signal.aborted || socket.readyState !== socket.OPEN || !chunk?.length) {
           break
         }
         decoder.feed(Uint8Array.from(chunk))

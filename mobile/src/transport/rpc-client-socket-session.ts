@@ -49,9 +49,15 @@ export class RpcClientSocketSession {
 
   constructor(private readonly options: SocketSessionOptions) {
     // Why: default WS for LAN/relay; iroh injects MobileIrohFramedSocket (same probe path).
-    this.socket = options.createSocket
-      ? options.createSocket(options.endpoint)
-      : new WebSocket(options.endpoint)
+    if (options.createSocket) {
+      this.socket = options.createSocket(options.endpoint)
+    } else {
+      const { protocol } = new URL(options.endpoint)
+      if (protocol !== 'ws:' && protocol !== 'wss:') {
+        throw new Error('Unsupported WebSocket URL scheme: expected ws:// or wss://.')
+      }
+      this.socket = new WebSocket(options.endpoint)
+    }
     this.attachHandlers()
     this.armConnectTimeout()
   }
@@ -80,7 +86,7 @@ export class RpcClientSocketSession {
       this.options.getCurrentSocket() === this.socket &&
       this.socket.readyState !== WebSocket.OPEN
     ) {
-      console.log('[net] sendEncrypted detected ws desync — forcing reconnect', {
+      console.log('[net] sendEncrypted detected transport desync — forcing reconnect', {
         readyState: this.socket.readyState
       })
       this.options.onForcedClose(this)
@@ -113,10 +119,10 @@ export class RpcClientSocketSession {
       if (this.isStale('open')) {
         return
       }
-      console.log('[net] ws.onopen', { attempt: this.options.getReconnectAttempt() })
+      console.log('[net] transport.onopen', { attempt: this.options.getReconnectAttempt() })
       this.clearConnectTimer()
       this.options.onHandshakeStarted()
-      this.options.emitLog('success', 'WebSocket open', 'Starting E2EE handshake')
+      this.options.emitLog('success', 'Transport open', 'Starting E2EE handshake')
       this.startHandshake()
     }
     this.socket.onmessage = (event) => {
@@ -147,7 +153,7 @@ export class RpcClientSocketSession {
       }
       const error = event as { message?: string } | undefined
       const description = describeSocketEvent(event)
-      console.log('[net] ws.onerror', {
+      console.log('[net] transport.onerror', {
         message: error?.message,
         state: this.options.getState(),
         attempt: this.options.getReconnectAttempt(),

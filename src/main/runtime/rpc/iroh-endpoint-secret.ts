@@ -2,7 +2,11 @@
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { hardenExistingSecureFile, writeSecureJsonFile } from '../../../shared/secure-file'
+import {
+  hardenExistingSecureFile,
+  isUnreadableError,
+  writeSecureJsonFile
+} from '../../../shared/secure-file'
 
 export const IROH_ENDPOINT_SECRET_FILENAME = 'orca-iroh-endpoint-secret.json'
 const SECRET_VERSION = 1
@@ -33,8 +37,14 @@ export function loadOrCreateIrohEndpointSecret(userDataPath: string): number[] {
           return bytes
         }
       }
-    } catch {
-      // Malformed file — regenerate below.
+    } catch (error) {
+      if (isUnreadableError(error)) {
+        throw new Error(
+          'Cannot read the Iroh endpoint secret; refusing to replace the identity used by paired phones.',
+          { cause: error }
+        )
+      }
+      // Replace malformed files below.
     }
     // Why: a new secret means a new EndpointId — every paired phone's stored
     // dial target goes stale, so the cause must be visible in logs.

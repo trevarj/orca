@@ -434,6 +434,8 @@ export type GlobalSettings = GlobalSettingsBase & {
   mobileAutoRestoreFitMs: number | null
   /** New QR pairing: absent/automatic allows Relay + local; local-only restricts to same network; iroh uses experimental iroh without Relay. */
   mobilePairingConnectionMode?: 'automatic' | 'local-only' | 'iroh'
+  /** This host's iroh relay origin; null uses the SDK's automatic relay selection. */
+  mobileIrohRelayUrl: string | null
   /** Explicit custom address restored when generating future mobile pairing codes. */
   mobilePairingCustomAddress?: string | null
   /** Saved custom addresses available in both mobile pairing pickers. */

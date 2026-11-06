@@ -4,7 +4,6 @@ import Foundation
 /// Owns the local Endpoint and live dialed connections (one bi-stream each).
 /// Framing: 4-byte big-endian u32 length + payload; max 1 MiB.
 final class IrohClient {
-  static let shared = IrohClient()
   static let alpn = Data("orca-mobile-rpc/1".utf8)
   static let maxFrame = 1 * 1024 * 1024
   static let pathPollNanos: UInt64 = 2_000_000_000
@@ -14,21 +13,52 @@ final class IrohClient {
   var onClosed: ((String, String) -> Void)?
 
   private let lock = NSLock()
+  private let stopLock = AsyncLock()
   private var startTask: Task<Endpoint, Error>?
   private var endpoint: Endpoint?
+  private var homeRelayUrl: String?
   private var connections: [String: LiveConnection] = [:]
   // Why: stop() during an in-flight bind must not let the late bind result
   // resurrect state — stale generations close their endpoint instead.
   private var generation = 0
+  private var destroyed = false
 
-  private init() {}
+  init() {}
 
-  func start() async throws -> String {
-    try await ensureEndpoint().id().description
+  func start(homeRelayUrl: String?) async throws -> String {
+    try Task.checkCancellation()
+    let selected = try Self.parseHomeRelayUrl(homeRelayUrl)
+    await stopLock.acquire()
+    let changed: Bool
+    do {
+      try Task.checkCancellation()
+      changed = try locked {
+        guard !destroyed else { throw IrohClientError.notStarted }
+        let changed = self.homeRelayUrl != selected
+        self.homeRelayUrl = selected
+        return changed
+      }
+    } catch {
+      await stopLock.release()
+      throw error
+    }
+    if changed { await stopLocked() }
+    let startGeneration = locked { generation }
+    await stopLock.release()
+    try Task.checkCancellation()
+    let (ep, gen) = try await ensureEndpoint(expectedGeneration: startGeneration)
+    try Task.checkCancellation()
+    return try locked {
+      guard !destroyed, generation == gen, endpoint === ep else { throw IrohClientError.notStarted }
+      return ep.id().description
+    }
   }
 
   func connect(endpointId: String, relayUrl: String?, directAddresses: [String]) async throws -> String {
-    let ep = try await ensureEndpoint()
+    try Task.checkCancellation()
+    let connectGeneration = locked { generation }
+    let (ep, gen) = try await ensureEndpoint(expectedGeneration: connectGeneration)
+    try Task.checkCancellation()
     let trimmed = endpointId
       .trimmingCharacters(in: .whitespacesAndNewlines)
       .lowercased()
@@ -42,6 +72,10 @@ final class IrohClient {
     let conn = try await ep.connect(addr: addr, alpn: Self.alpn)
     let bi: BiStream
     do {
+      try Task.checkCancellation()
+      guard locked({ !destroyed && generation == gen && endpoint === ep }) else {
+        throw IrohClientError.notStarted
+      }
       bi = try await conn.openBi()
     } catch {
       try? conn.close(errorCode: 0, reason: Data("open_bi_failed".utf8))
@@ -54,16 +88,34 @@ final class IrohClient {
       send: bi.send(),
       recv: bi.recv()
     )
-    locked { connections[connectionId] = live }
-    startReadLoop(live)
-    startPathPoll(live)
-    startClosedWatch(live)
-    return connectionId
+    let current = locked { () -> Bool in
+      guard !destroyed, generation == gen, endpoint === ep, !Task.isCancelled else { return false }
+      connections[connectionId] = live
+      // Publish all task handles before stop can take ownership of this connection.
+      startReadLoop(live)
+      startPathPoll(live)
+      startClosedWatch(live)
+      return true
+    }
+    guard current else {
+      await teardown(live, reason: "stopped", emit: false)
+      throw IrohClientError.notStarted
+    }
+    do {
+      try Task.checkCancellation()
+      return connectionId
+    } catch {
+      await drop(connectionId: connectionId, reason: "closed")
+      throw error
+    }
   }
 
   func send(connectionId: String, bytesBase64: String) async throws {
-    guard let live = locked({ connections[connectionId] }) else {
+    guard let live = locked({ destroyed ? nil : connections[connectionId] }) else {
       throw IrohClientError.unknownConnection
+    }
+    guard bytesBase64.utf8.count <= ((Self.maxFrame + 2) / 3) * 4 else {
+      throw IrohClientError.frameTooLarge
     }
     guard let payload = Data(base64Encoded: bytesBase64) else {
       throw IrohClientError.invalidBase64
@@ -82,6 +134,7 @@ final class IrohClient {
     frame.append(payload)
     await live.writeLock.acquire()
     do {
+      try Task.checkCancellation()
       try await live.send.writeAll(buf: frame)
       await live.writeLock.release()
     } catch {
@@ -91,7 +144,7 @@ final class IrohClient {
   }
 
   func pathInfo(connectionId: String) throws -> (pathType: String, detail: String) {
-    guard let live = locked({ connections[connectionId] }) else {
+    guard let live = locked({ destroyed ? nil : connections[connectionId] }) else {
       throw IrohClientError.unknownConnection
     }
     return IrohPathUtils.snapshot(live.connection.paths())
@@ -104,15 +157,35 @@ final class IrohClient {
   }
 
   func stop() async {
-    let (lives, ep) = locked { () -> ([LiveConnection], Endpoint?) in
+    await stopLock.acquire()
+    await stopLocked()
+    await stopLock.release()
+  }
+
+  func destroy() {
+    let shouldStop = locked { () -> Bool in
+      guard !destroyed else { return false }
+      destroyed = true
+      return true
+    }
+    if shouldStop {
+      Task { await self.stop() }
+    }
+  }
+
+  private func stopLocked() async {
+    let (lives, ep, task) = locked { () -> ([LiveConnection], Endpoint?, Task<Endpoint, Error>?) in
       generation += 1
       let all = Array(connections.values)
       connections.removeAll()
       let current = endpoint
       endpoint = nil
+      let task = startTask
       startTask = nil
-      return (all, current)
+      return (all, current, task)
     }
+    // Bind is local, not a relay-online wait. Join so its owned result is always consumed.
+    _ = await task?.result
     for live in lives {
       await teardown(live, reason: "stopped", emit: true)
     }
@@ -127,33 +200,75 @@ final class IrohClient {
     return try body()
   }
 
-  private func ensureEndpoint() async throws -> Endpoint {
-    // Why: concurrent dials share one bind task — a check-then-bind race would
-    // leak the losing endpoint's UDP socket and hand JS a dead endpoint id.
-    let (task, gen) = locked { () -> (Task<Endpoint, Error>, Int) in
-      if let existing = startTask { return (existing, generation) }
+  static func parseHomeRelayUrl(_ value: String?) throws -> String? {
+    guard let selected = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !selected.isEmpty else { return nil }
+    guard selected.range(of: #"^https://[^/?#@\\\s]+/?$"#,
+      options: [.regularExpression, .caseInsensitive]) != nil,
+      !selected.hasSuffix(":"), !selected.hasSuffix(":/"), !selected.contains("%"),
+      var components = URLComponents(string: selected),
+      components.scheme?.lowercased() == "https",
+      let host = components.host, !host.isEmpty,
+      components.user == nil, components.password == nil,
+      components.query == nil, components.fragment == nil,
+      components.path.isEmpty || components.path == "/",
+      (1...65535).contains(components.port ?? 443)
+    else { throw IrohClientError.invalidRelayUrl }
+    components.scheme = "https"
+    components.host = host.lowercased()
+    if components.port == 443 { components.port = nil }
+    components.path = "/"
+    guard let canonical = components.url?.absoluteString else {
+      throw IrohClientError.invalidRelayUrl
+    }
+    return canonical
+  }
+
+  private func ensureEndpoint(expectedGeneration: Int) async throws -> (Endpoint, Int) {
+    // Concurrent dials share one local bind; only its task publishes or closes the owned result.
+    let (task, gen) = try locked { () -> (Task<Endpoint, Error>, Int) in
+      guard !destroyed, generation == expectedGeneration else { throw IrohClientError.notStarted }
+      if let existing = startTask { return (existing, expectedGeneration) }
+      let gen = expectedGeneration
+      let selected = homeRelayUrl
       let created = Task {
+        let relayMode: RelayMode?
+        if let selected {
+          do {
+            relayMode = try RelayMode.customFromUrls(urls: [selected])
+          } catch {
+            throw IrohClientError.invalidRelayUrl
+          }
+        } else {
+          relayMode = nil
+        }
         let ep = try await Endpoint.bind(options: EndpointOptions(
           preset: presetN0(),
-          alpns: [Self.alpn]
+          alpns: [Self.alpn],
+          relayMode: relayMode
         ))
-        await ep.online()
+        let current = self.locked { () -> Bool in
+          guard !self.destroyed, self.generation == gen else { return false }
+          self.endpoint = ep
+          return true
+        }
+        guard current else {
+          try? await ep.close()
+          throw IrohClientError.notStarted
+        }
         return ep
       }
       startTask = created
-      return (created, generation)
+      return (created, gen)
     }
     do {
       let ep = try await task.value
-      let stale = locked { generation != gen }
-      if stale {
-        try? await ep.close()
+      guard locked({ !destroyed && generation == gen && endpoint === ep }) else {
         throw IrohClientError.notStarted
       }
-      locked { endpoint = ep }
-      return ep
+      return (ep, gen)
     } catch {
-      locked { if generation == gen { startTask = nil } }
+      locked { if generation == gen && startTask == task { startTask = nil } }
       throw error
     }
   }
@@ -165,6 +280,7 @@ final class IrohClient {
       do {
         while !Task.isCancelled {
           let chunk = try await live.recv.read(sizeLimit: UInt32(64 * 1024))
+          try Task.checkCancellation()
           if chunk.isEmpty { break }
           buffer.append(chunk)
           try self.drainFrames(from: &buffer, connectionId: live.id)
@@ -180,6 +296,7 @@ final class IrohClient {
 
   private func drainFrames(from buffer: inout Data, connectionId: String) throws {
     while buffer.count >= 4 {
+      try Task.checkCancellation()
       let length: UInt32 = buffer.prefix(4).withUnsafeBytes { raw in
         raw.loadUnaligned(as: UInt32.self).bigEndian
       }
@@ -190,18 +307,23 @@ final class IrohClient {
       guard buffer.count >= 4 + frameLen else { return }
       let payload = buffer.subdata(in: 4..<(4 + frameLen))
       buffer.removeSubrange(0..<(4 + frameLen))
-      onMessage?(connectionId, payload.base64EncodedString())
+      if locked({ !destroyed && connections[connectionId] != nil }) {
+        onMessage?(connectionId, payload.base64EncodedString())
+      }
     }
   }
 
   private func startPathPoll(_ live: LiveConnection) {
     live.pathTask = Task { [weak self] in
       while !Task.isCancelled {
+        guard let self, self.locked({ !self.destroyed && self.connections[live.id] === live }) else {
+          return
+        }
         let snap = IrohPathUtils.snapshot(live.connection.paths())
         if snap.pathType != live.lastPathType || snap.detail != live.lastPathDetail {
           live.lastPathType = snap.pathType
           live.lastPathDetail = snap.detail
-          self?.onPathChanged?(live.id, snap.pathType, snap.detail)
+          self.onPathChanged?(live.id, snap.pathType, snap.detail)
         }
         try? await Task.sleep(nanoseconds: Self.pathPollNanos)
       }
@@ -216,9 +338,10 @@ final class IrohClient {
   }
 
   private func drop(connectionId: String, reason: String) async {
+    // The recv failure can beat closed(); keep the peer's application code (4001).
     let live = locked { connections.removeValue(forKey: connectionId) }
     guard let live else { return }
-    await teardown(live, reason: reason, emit: true)
+    await teardown(live, reason: live.connection.closeReason() ?? reason, emit: true)
   }
 
   private func teardown(_ live: LiveConnection, reason: String, emit: Bool) async {
@@ -226,7 +349,7 @@ final class IrohClient {
     live.pathTask?.cancel()
     live.closedTask?.cancel()
     try? live.connection.close(errorCode: 0, reason: Data(reason.utf8))
-    if emit {
+    if emit && locked({ !destroyed }) {
       onClosed?(live.id, reason)
     }
   }
@@ -257,6 +380,7 @@ private final class LiveConnection {
 enum IrohClientError: Error, LocalizedError {
   case notStarted
   case invalidEndpointId
+  case invalidRelayUrl
   case unknownConnection
   case invalidBase64
   case frameTooLarge
@@ -265,6 +389,7 @@ enum IrohClientError: Error, LocalizedError {
     switch self {
     case .notStarted: return "iroh_not_started"
     case .invalidEndpointId: return "iroh_invalid_endpoint_id"
+    case .invalidRelayUrl: return "iroh_invalid_relay_url"
     case .unknownConnection: return "iroh_unknown_connection"
     case .invalidBase64: return "iroh_invalid_base64"
     case .frameTooLarge: return "iroh_frame_too_large"

@@ -1,5 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
 
+// Native-only preference; do not expose endpoint configuration to embedded pages.
+export const IROH_HOME_RELAY_URL_KEY = 'orca:irohHomeRelayUrl'
+
 // Shell init is synchronous, so mirror stored keys in memory; page-reachable writes must use persistMirrored.
 // Null records a known removal, distinct from an unhydrated key.
 const mirror = new Map<string, string | null>()
@@ -64,15 +67,17 @@ function note(key: string, value: string | null): void {
   }
 }
 
-// Mirror only accepted writes; page stores can refuse route keys or oversized values, and callers need the refusal.
-export function persistMirrored(key: string, value: string | null): Promise<void> {
+// Page stores can resolve refused writes, so read back before mirroring.
+// Native-only callers may trust a successful mutation to avoid a fallible post-commit read.
+export function persistMirrored(
+  key: string,
+  value: string | null,
+  options?: { trustNativeCommit?: boolean }
+): Promise<void> {
   const write = value === null ? AsyncStorage.removeItem(key) : AsyncStorage.setItem(key, value)
-  // Read back before noting: the page adapter can resolve a refused write, so requested value is not proof of persistence.
   return write
-    .then(() => AsyncStorage.getItem(key))
-    .then((stored) => {
-      note(key, stored)
-    })
+    .then(() => (options?.trustNativeCommit ? value : AsyncStorage.getItem(key)))
+    .then((stored) => note(key, stored))
 }
 
 // Native-shell-only: note before async storage so the next synchronous init sees the page’s accepted value.
