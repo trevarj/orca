@@ -405,35 +405,46 @@ describe('MobileIrohFramedSocket', () => {
     expect(socket.bufferedAmount).toBe(0)
   })
 
-  it('reports a failed native send and discards later queued frames', async () => {
-    const socket = await openSocket()
-    const started = Promise.withResolvers<void>()
-    const sent = Promise.withResolvers<void>()
-    const received: string[] = []
-    const onclose = vi.fn()
-    const onerror = vi.fn()
-    socket.onclose = onclose
-    socket.onerror = onerror
-    irohSend.mockImplementation(async (_connectionId, b64) => {
-      received.push(atob(b64))
-    })
-    irohSend.mockImplementationOnce(async () => {
-      started.resolve()
-      await sent.promise
-      throw new Error('write failed')
-    })
+  it.each(['onerror', 'onclose'])(
+    'reports a failed native send and discards queued frames even when %s throws',
+    async (throwingCallback) => {
+      const socket = await openSocket()
+      const started = Promise.withResolvers<void>()
+      const sent = Promise.withResolvers<void>()
+      const received: string[] = []
+      const onclose = vi.fn(() => {
+        if (throwingCallback === 'onclose') {
+          throw new Error('close callback failed')
+        }
+      })
+      const onerror = vi.fn(() => {
+        if (throwingCallback === 'onerror') {
+          throw new Error('error callback failed')
+        }
+      })
+      socket.onclose = onclose
+      socket.onerror = onerror
+      irohSend.mockImplementation(async (_connectionId, b64) => {
+        received.push(atob(b64))
+      })
+      irohSend.mockImplementationOnce(async () => {
+        started.resolve()
+        await sent.promise
+        throw new Error('write failed')
+      })
 
-    socket.send('first')
-    await started.promise
-    socket.send('queued')
-    sent.resolve()
+      socket.send('first')
+      await started.promise
+      socket.send('queued')
+      sent.resolve()
 
-    await vi.waitFor(() =>
-      expect(onclose).toHaveBeenCalledWith({ code: 1011, reason: 'iroh_send_failed' })
-    )
-    expect(onerror).toHaveBeenCalledOnce()
-    expect(socket.readyState).toBe(socket.CLOSED)
-    expect(socket.bufferedAmount).toBe(0)
-    expect(received).toEqual([])
-  })
+      await vi.waitFor(() =>
+        expect(onclose).toHaveBeenCalledWith({ code: 1011, reason: 'iroh_send_failed' })
+      )
+      expect(onerror).toHaveBeenCalledOnce()
+      expect(socket.readyState).toBe(socket.CLOSED)
+      expect(socket.bufferedAmount).toBe(0)
+      expect(received).toEqual([])
+    }
+  )
 })
