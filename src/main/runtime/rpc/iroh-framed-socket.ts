@@ -1,6 +1,6 @@
 // Duck-typed WebSocket for MobileSocketWiring / E2EEChannel over an iroh bi-stream.
 import { EventEmitter } from 'node:events'
-import type { BiStream, Connection, SendStream } from '@number0/iroh'
+import type { BiStream, Connection } from '@number0/iroh'
 import {
   encodeIrohFramePayload,
   encodeLengthPrefixedFrame,
@@ -42,7 +42,7 @@ export class IrohFramedSocket extends EventEmitter {
         if (this.closed) {
           return
         }
-        await writeAllChunked(this.bi.send, frame)
+        await this.writeAllChunked(frame)
         this.bufferedAmount = Math.max(0, this.bufferedAmount - frame.byteLength)
       })
       .catch((error: unknown) => {
@@ -50,6 +50,20 @@ export class IrohFramedSocket extends EventEmitter {
         this.emit('error', error instanceof Error ? error : new Error(String(error)))
         this.terminate()
       })
+  }
+
+  /** Report completed native chunks, never queued writes or completions after shutdown. */
+  private async writeAllChunked(bytes: Buffer): Promise<void> {
+    let offset = 0
+    while (offset < bytes.byteLength && !this.closed) {
+      const end = Math.min(offset + WRITE_CHUNK_BYTES, bytes.byteLength)
+      await this.bi.send.writeAll(Array.from(bytes.subarray(offset, end)))
+      if (this.closed) {
+        return
+      }
+      this.emit('write-progress')
+      offset = end
+    }
   }
 
   close(code?: number, reason?: string): void {
@@ -78,16 +92,6 @@ export class IrohFramedSocket extends EventEmitter {
       // Already closed.
     }
     this.emit('close')
-  }
-}
-
-/** Write bounded native chunks sequentially without interleaving frames. */
-export async function writeAllChunked(send: SendStream, bytes: Buffer): Promise<void> {
-  let offset = 0
-  while (offset < bytes.byteLength) {
-    const end = Math.min(offset + WRITE_CHUNK_BYTES, bytes.byteLength)
-    await send.writeAll(Array.from(bytes.subarray(offset, end)))
-    offset = end
   }
 }
 
