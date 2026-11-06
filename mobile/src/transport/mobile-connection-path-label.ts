@@ -5,6 +5,9 @@ export function mobileConnectionPathLabel(path: MobileConnectionPath): string {
   if (path === 'relay') {
     return 'Orca Relay'
   }
+  if (path === 'iroh') {
+    return 'Iroh'
+  }
   return path === 'tailscale'
     ? translate('connection.connectionPathLabel.directTailscale', 'Direct · Tailscale')
     : translate('connection.connectionPathLabel.directLan', 'Direct · LAN')
@@ -13,6 +16,9 @@ export function mobileConnectionPathLabel(path: MobileConnectionPath): string {
 export function mobileConnectionPathAccessibilityLabel(path: MobileConnectionPath): string {
   if (path === 'relay') {
     return 'Orca Relay'
+  }
+  if (path === 'iroh') {
+    return 'Iroh'
   }
   return path === 'tailscale'
     ? translate('connection.connectionPathLabel.directViaTailscale', 'Direct via Tailscale')

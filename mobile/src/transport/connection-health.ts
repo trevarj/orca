@@ -67,7 +67,7 @@ function relayHostCopy(): Record<
 }
 
 export type ConnectionVerdict =
-  | { kind: 'normal'; label: string; dialing?: boolean }
+  | { kind: 'normal'; label: string; dialing?: boolean; hint?: string }
   | { kind: 'warning'; label: string; hint?: string; detail?: string }
   | {
       kind: 'unreachable'
@@ -86,6 +86,8 @@ export function classifyConnection(args: {
   lastConnectedAt: number | null
   // A pinned endpoint enables Tailscale-specific hints.
   endpoint?: string | null
+  // Compact iroh diagnostic when candidate (attempting/failed/skipped).
+  irohHint?: string | null
   pendingPath?: MobileConnectionPath | null
   // Credential refusal needs re-pairing and outranks connecting state.
   pairingRejected?: boolean
@@ -97,9 +99,10 @@ export function classifyConnection(args: {
 }): ConnectionVerdict {
   const { state, reconnectAttempts, lastConnectedAt } = args
   const now = args.nowMs ?? Date.now()
-  const hint = isTailscaleEndpoint(args.endpoint)
+  const tailscaleHint = isTailscaleEndpoint(args.endpoint)
     ? translate('connection.connectionHealth.tailscaleHint', 'check Tailscale')
     : undefined
+  const hint = mergeHints(tailscaleHint, args.irohHint)
   const host =
     args.hostName?.trim() || translate('connection.connectionHealth.hostFallback', 'Host')
   const staleReason = lastConnectedAt == null ? 'never-connected' : 'stale'
@@ -165,7 +168,8 @@ export function classifyConnection(args: {
   if (state === 'disconnected') {
     return {
       kind: 'normal',
-      label: translate('connection.connectionHealth.disconnected', 'Disconnected')
+      label: translate('connection.connectionHealth.disconnected', 'Disconnected'),
+      ...(args.irohHint ? { hint: args.irohHint } : {})
     }
   }
 
@@ -203,8 +207,16 @@ export function classifyConnection(args: {
       state === 'reconnecting'
         ? translate('connection.connectionHealth.reconnecting', 'Reconnecting…')
         : translate('connection.connectionHealth.connecting', 'Connecting…'),
-    dialing: true
+    dialing: true,
+    ...(args.irohHint ? { hint: args.irohHint } : {})
   }
+}
+
+function mergeHints(a?: string, b?: string | null): string | undefined {
+  if (a && b) {
+    return `${a}; ${b}`
+  }
+  return a ?? b ?? undefined
 }
 
 // Retries the user should hear about; auth-failed has its own re-pair remedy.
@@ -219,7 +231,11 @@ export function isConnectionDialing(verdict: ConnectionVerdict): boolean {
 }
 
 export function verdictDisplayLabel(verdict: ConnectionVerdict): string {
-  if (isConnectionOutage(verdict) && verdict.hint) {
+  if (
+    (isConnectionOutage(verdict) || verdict.kind === 'normal') &&
+    verdict.hint &&
+    (verdict.kind !== 'normal' || verdict.hint.startsWith('Iroh'))
+  ) {
     return translate('connection.connectionHealth.labelWithHint', '{{label}} — {{hint}}', {
       label: verdict.label,
       hint: verdict.hint
