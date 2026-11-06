@@ -9,7 +9,9 @@ import type { MobileSocketTransport } from './mobile-socket-wiring'
 import {
   createFrameDecoder,
   decodeIrohFramePayload,
-  IROH_MOBILE_RPC_ALPN
+  IROH_MOBILE_RPC_ALPN,
+  IROH_MAX_FRAME_BYTES,
+  IROH_PRE_AUTH_MAX_FRAME_BYTES
 } from './iroh-frame-codec'
 import { loadOrCreateIrohEndpointSecret } from './iroh-endpoint-secret'
 import { bindIrohEndpoint } from './iroh-endpoint-bind'
@@ -105,7 +107,7 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
     this.connectionCloseHandler = handler
   }
 
-  /** Mark an owned socket authenticated and cancel its pre-authentication deadline. */
+  /** Authenticate an owned socket, admitting full RPC frames and cancelling its pre-auth deadline. */
   setClientId(ws: WebSocket, clientId: string): void {
     // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: Only IrohFramedSockets are registered with this transport, so every ws handed back is one.
     const socket = ws as unknown as IrohFramedSocket
@@ -285,6 +287,9 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
     })
 
     const decoder = createFrameDecoder({
+      // Keep the public 128-connection admission bound at 1 MiB per unauthenticated payload.
+      maxFrameBytes: () =>
+        this.clientIds.has(socket) ? IROH_MAX_FRAME_BYTES : IROH_PRE_AUTH_MAX_FRAME_BYTES,
       onFrame: (payload) => {
         if (this.shutdown.signal.aborted || socket.readyState !== socket.OPEN) {
           return
