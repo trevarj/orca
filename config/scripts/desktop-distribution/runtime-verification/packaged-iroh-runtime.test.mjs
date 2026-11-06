@@ -1,22 +1,87 @@
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
+import { copyScriptWithLocalModules } from '../../test-fixtures/script-copy-closure/script-module-dependencies.mjs'
 
 const require = createRequire(import.meta.url)
 const {
   assertPackagedIrohNativeVariantInstalled,
-  createPackagedRuntimeNodeModuleResources,
   prunePackagedIrohNapi
 } = require('../../../packaged-runtime-node-modules.cjs')
 
-it('includes @number0/iroh and its platform subpackage in the packaged runtime closure', () => {
-  const packagedTargets = createPackagedRuntimeNodeModuleResources().map((resource) => resource.to)
-  expect(packagedTargets).toContain(join('node_modules', '@number0', 'iroh'))
-  expect(
-    packagedTargets.some((target) => target.startsWith(join('node_modules', '@number0', 'iroh-')))
-  ).toBe(true)
+it('collects installed Iroh optional dependency closures without requiring a host SDK variant', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'orca-iroh-closure-')))
+  try {
+    copyScriptWithLocalModules(
+      require.resolve('../../../packaged-runtime-node-modules.cjs'),
+      join(root, 'config')
+    )
+    const writePackage = async (directory, metadata) => {
+      await mkdir(directory, { recursive: true })
+      await writeFile(join(directory, 'package.json'), JSON.stringify(metadata))
+    }
+    for (const name of [
+      '@anthropic-ai/claude-agent-sdk',
+      '@linear/sdk',
+      '@orca/process-host',
+      '@parcel/watcher',
+      'electron-updater',
+      'i18next',
+      'jsonc-parser',
+      'node-pty',
+      'posthog-node',
+      'proper-lockfile',
+      'qrcode',
+      'smol-toml',
+      'ssh2',
+      'tweetnacl',
+      'ws',
+      'yaml',
+      'zod'
+    ]) {
+      await writePackage(join(root, 'node_modules', name), { name })
+    }
+    const loaderDir = join(root, 'node_modules', '@number0', 'iroh')
+    const nativeDir = join(loaderDir, 'node_modules', '@number0', 'iroh-linux-x64-gnu')
+    await writePackage(loaderDir, {
+      name: '@number0/iroh',
+      optionalDependencies: { '@number0/iroh-linux-x64-gnu': '1.1.0' }
+    })
+    await writePackage(nativeDir, {
+      name: '@number0/iroh-linux-x64-gnu',
+      dependencies: { 'native-session-state': '1.0.0' }
+    })
+    await writePackage(join(nativeDir, 'node_modules', 'native-session-state'), {
+      name: 'native-session-state'
+    })
+    const { createPackagedRuntimeNodeModuleResources } = createRequire(join(root, 'package.json'))(
+      './config/packaged-runtime-node-modules.cjs'
+    )
+    const resources = createPackagedRuntimeNodeModuleResources('linux')
+    expect(
+      resources
+        .map((resource) => resource.to)
+        .filter((target) => target.startsWith(join('node_modules', '@number0', 'iroh')))
+    ).toEqual([
+      join('node_modules', '@number0', 'iroh'),
+      join('node_modules', '@number0', 'iroh-linux-x64-gnu')
+    ])
+    expect(
+      resources.find((resource) => resource.to === join('node_modules', 'native-session-state'))
+    ).toMatchObject({ from: join(nativeDir, 'node_modules', 'native-session-state') })
+
+    await rm(nativeDir, { recursive: true })
+    const withoutNative = createPackagedRuntimeNodeModuleResources('linux').map(
+      (resource) => resource.to
+    )
+    expect(withoutNative).toContain(join('node_modules', '@number0', 'iroh'))
+    expect(withoutNative).not.toContain(join('node_modules', '@number0', 'iroh-linux-x64-gnu'))
+    expect(withoutNative).not.toContain(join('node_modules', 'native-session-state'))
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 it('prunes non-target @number0/iroh platform subpackages from packaged runtime resources', async () => {

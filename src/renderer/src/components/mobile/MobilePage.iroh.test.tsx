@@ -52,6 +52,7 @@ vi.mock('./MobilePageContent', () => ({
     handleConnectionModeChange: (mode: MobilePairingConnectionMode) => void
     handleAddressChange: (address: string) => void
     handleContinue: () => void
+    handleBack: () => void
     pairLoading: boolean
     pairQrDataUrl: string | null
     pairingUrl: string | null
@@ -72,6 +73,9 @@ vi.mock('./MobilePageContent', () => ({
       </button>
       <button type="button" onClick={props.handleContinue}>
         Continue
+      </button>
+      <button type="button" onClick={props.handleBack}>
+        Back
       </button>
       <button type="button" onClick={() => props.handleConnectionModeChange('local-only')}>
         LAN
@@ -172,6 +176,71 @@ describe('MobilePage Iroh pairing', () => {
     expect(getPairingQR).toHaveBeenCalledOnce()
     expect(screen.getByTestId('pairing-qr')).toHaveTextContent('base64,qr')
     expect(screen.getByTestId('pairing-url')).toHaveTextContent('orca://pair#iroh')
+  })
+
+  it('waits for the current LAN address when leaving Iroh during a new visit lookup', async () => {
+    const user = userEvent.setup()
+    mocks.storeState.settings.mobilePairingConnectionMode = 'iroh'
+    const lookup = Promise.withResolvers<Record<string, unknown>>()
+    listNetworkInterfaces
+      .mockResolvedValueOnce({ interfaces: [{ name: 'Wi-Fi', address: '10.0.0.5' }] })
+      .mockReturnValueOnce(lookup.promise)
+    getPairingQR.mockImplementation(
+      ({
+        connectionMode,
+        address
+      }: {
+        connectionMode: MobilePairingConnectionMode
+        address?: string
+      }) =>
+        Promise.resolve(
+          connectionMode === 'iroh'
+            ? {
+                available: true,
+                qrDataUrl: 'data:image/png;base64,iroh',
+                pairingUrl: 'orca://pair#iroh'
+              }
+            : address === '10.0.0.9'
+              ? {
+                  available: true,
+                  qrDataUrl: 'data:image/png;base64,current-lan',
+                  pairingUrl: 'orca://pair#10.0.0.9'
+                }
+              : {
+                  available: true,
+                  qrDataUrl: 'data:image/png;base64,stale-lan',
+                  pairingUrl: 'orca://pair#10.0.0.5'
+                }
+        )
+    )
+    await openPairingStep()
+    await waitFor(() =>
+      expect(screen.getByTestId('selected-address')).toHaveTextContent('10.0.0.5')
+    )
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+    await user.click(screen.getByRole('button', { name: 'Enter flow' }))
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await waitFor(() => expect(screen.getByTestId('pairing-qr')).toHaveTextContent('base64,iroh'))
+    expect(screen.getByTestId('refreshing-addresses')).toHaveTextContent('true')
+
+    await user.click(screen.getByRole('button', { name: 'LAN' }))
+    expect(screen.getByTestId('pairing-qr')).toHaveTextContent('none')
+    expect(screen.getByTestId('pairing-url')).toHaveTextContent('none')
+    expect(screen.getByTestId('pair-loading')).toHaveTextContent('true')
+    expect(getPairingQR).not.toHaveBeenCalledWith({
+      address: '10.0.0.5',
+      connectionMode: 'local-only'
+    })
+
+    await act(async () => {
+      lookup.resolve({ interfaces: [{ name: 'Wi-Fi', address: '10.0.0.9' }] })
+    })
+    await waitFor(() =>
+      expect(screen.getByTestId('pairing-qr')).toHaveTextContent('base64,current-lan')
+    )
+    expect(screen.getByTestId('pairing-url')).toHaveTextContent('orca://pair#10.0.0.9')
+    expect(screen.getByTestId('pair-loading')).toHaveTextContent('false')
   })
 
   it('omits saved and overridden addresses from signed-out Iroh requests without losing LAN selection', async () => {
