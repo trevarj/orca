@@ -34,7 +34,8 @@ export function toStoredHostProfile(host: HostProfile): StoredHostProfile {
     lastKnownHostMachine,
     endpoint,
     publicKeyB64,
-    lastConnected
+    lastConnected,
+    iroh
   } = host
   return {
     id,
@@ -45,7 +46,10 @@ export function toStoredHostProfile(host: HostProfile): StoredHostProfile {
     ...(lastKnownHostMachine !== undefined ? { lastKnownHostMachine } : {}),
     endpoint,
     publicKeyB64,
-    lastConnected
+    lastConnected,
+    // Why: iroh dial data is pairing output, not relay overlay state — it has no
+    // other durable home, so dropping it here would strand the host after restart.
+    ...(iroh ? { iroh } : {})
   }
 }
 

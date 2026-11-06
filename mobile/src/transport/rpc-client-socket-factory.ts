@@ -23,6 +23,7 @@ type SocketFactoryOptions = {
   onAuthenticatedInbound: (session: RpcClientSocketSession) => void
   onClosed: (session: RpcClientSocketSession, closeCode?: number) => void
   onForcedClose: (session: RpcClientSocketSession) => void
+  createSocket?: (endpoint: string) => WebSocket
 }
 
 export class RpcClientSocketFactory {
@@ -55,10 +56,11 @@ export class RpcClientSocketFactory {
       'info',
       this.options.getReconnectAttempt() > 0
         ? `Reconnecting (attempt ${this.options.getReconnectAttempt() + 1})`
-        : 'Opening WebSocket',
+        : 'Opening transport',
       redactSocketEndpoint(this.options.endpoint)
     )
     return new RpcClientSocketSession({
+      ...(this.options.createSocket ? { createSocket: this.options.createSocket } : {}),
       endpoint: this.options.endpoint,
       deviceToken: this.options.deviceToken,
       serverPublicKeyB64: this.options.serverPublicKeyB64,

@@ -294,11 +294,20 @@ async function startOrcadRuntime(
   const rpc = new OrcaRuntimeRpcServer({
     runtime,
     userDataPath: runtimeUserDataPath,
+    irohRelayUrl: profileStore.getSettings().mobileIrohRelayUrl,
+    onStop: () => unsubscribeIrohRelay(),
     enableWebSocket: true,
     // Pin operator exposure across restarts; pairing must not silently widen a loopback bind.
     pinnedBindHost: bindHost,
     webClientRoot: resolveOrcadWebClientRoot(options.webClientRoot),
     ...orcadWsPortOptions(options.port)
+  })
+  const unsubscribeIrohRelay = profileStore.onSettingsChanged((updates, settings) => {
+    if ('mobileIrohRelayUrl' in updates) {
+      void rpc.setIrohRelayUrl(settings.mobileIrohRelayUrl).catch(() => {
+        console.warn('[orcad] Could not apply the saved iroh relay preference')
+      })
+    }
   })
   pairedEnvironments.bindRpc(rpc)
   runtime.setAgentSenderPeerKey(() => rpc.getE2EEPublicKey())

@@ -118,6 +118,7 @@ export function MobileHeroPairingStep({
   const copyPairingCodeRef = useRef<HTMLButtonElement | null>(null)
   const pairingWasReadyRef = useRef(pairingUrl != null && !pairLoading)
   const usingRelay = connectionMode === 'automatic'
+  const usingIroh = connectionMode === 'iroh'
   const [networkDisclosureOpen, setNetworkDisclosureOpen] = useState(false)
   // Show custom addresses directly; their pinned row cannot be collapsed by a disclosure trigger.
   const networkDisclosurePinned = selectedAddressIsCustom
@@ -312,9 +313,9 @@ export function MobileHeroPairingStep({
               </div>
             </CollapsibleContent>
           </Collapsible>
-        ) : (
+        ) : !usingIroh ? (
           networkRow
-        )}
+        ) : null}
 
         <div className="mp-inline-actions">
           <span className="mp-action-divider">
@@ -331,12 +332,14 @@ export function MobileHeroPairingStep({
             {translate('auto.components.mobile.MobileHero.010dddcf27', 'Copy pairing code')}
           </button>
         </div>
-        <WindowsFirewallNotice
-          pairingReady={pairQrDataUrl != null}
-          address={selectedAddress}
-          usingRelay={usingRelay}
-          className="mt-3"
-        />
+        {!usingIroh ? (
+          <WindowsFirewallNotice
+            pairingReady={pairQrDataUrl != null}
+            address={selectedAddress}
+            usingRelay={usingRelay}
+            className="mt-3"
+          />
+        ) : null}
       </div>
     </div>
   )
