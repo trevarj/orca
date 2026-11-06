@@ -43,7 +43,7 @@ export function isStaleRpcSocketEvent(
   if (current === opening) {
     return false
   }
-  console.log('[net] stale ws event ignored', { eventName, state, attempt })
+  console.log('[net] stale transport event ignored', { eventName, state, attempt })
   return true
 }
 
@@ -52,7 +52,7 @@ export function logRpcSocketClose(options: SocketCloseLogOptions): number | unde
   const closeAt = Date.now()
   const constructToCloseMs = closeAt - options.constructedAt
   const closeEvent = describeSocketEvent(options.event)
-  console.log('[net] ws.onclose', {
+  console.log('[net] transport.onclose', {
     code: event?.code,
     reason: event?.reason,
     wasClean: event?.wasClean,

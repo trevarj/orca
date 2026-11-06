@@ -65,6 +65,7 @@ export function normalizeLoadedGlobalSettings(
     migratedWindowsRuntimeDefault,
     migratedLocalAccountRuntime,
     loadedCompactWorktreeCards,
+    mobileIrohRelayUrl,
     mobilePairingCustomAddress,
     mobilePairingCustomAddresses,
     normalizedNotifications,
@@ -142,6 +143,7 @@ export function normalizeLoadedGlobalSettings(
       hasLegacyMatchTerminalSidebar(matchTerminalSidebarInputs)
     ),
     appIcon: normalizeAppIconId(parsed.settings?.appIcon),
+    mobileIrohRelayUrl,
     mobilePairingCustomAddress,
     mobilePairingCustomAddresses,
     machineName: normalizeMachineName(parsed.settings?.machineName),
