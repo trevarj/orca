@@ -1,0 +1,217 @@
+name: Fork Linux x64 prerelease
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing signed annotated tag (iroh-v<package.version>-YYYYMMDD[-rN])
+        required: true
+        type: string
+      commit:
+        description: Full lowercase 40-character commit SHA the tag must resolve to
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-linux-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'trevarj/orca'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    outputs:
+      asset: ${{ steps.source.outputs.asset }}
+      tag_object: ${{ steps.source.outputs.tag_object }}
+    env:
+      TAG: ${{ inputs.tag }}
+      COMMIT: ${{ inputs.commit }}
+      ORCA_BACKGROUND_LAUNCH: '1'
+      ORCA_REQUIRE_ORCAD_TEMPLATE: '1'
+      ORCA_LINUX_X64_ONLY_TEMPLATE: '1'
+    steps:
+      - name: Validate explicit release identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^iroh-v[0-9]+\.[0-9]+\.[0-9]+-[0-9]{8}(-r[1-9][0-9]*)?$ ]] || {
+            echo '::error::Tag must be iroh-v<package.version>-YYYYMMDD[-rN].'; exit 1;
+          }
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            echo '::error::Commit must be a full lowercase 40-character SHA.'; exit 1;
+          }
+
+      - name: Checkout the existing tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+
+      - name: Bind the tag, checkout, and package version
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git cat-file -t "refs/tags/$TAG")" == tag ]]
+          [[ "$(git rev-parse HEAD)" == "$COMMIT" ]]
+          [[ "$(git rev-parse "refs/tags/$TAG^{commit}")" == "$COMMIT" ]]
+          version="$(node -p "require('./package.json').version")"
+          [[ "$TAG" == "iroh-v${version}-"* ]]
+          echo "asset=orca-ide_${version}_amd64.deb" >> "$GITHUB_OUTPUT"
+          echo "tag_object=$(git rev-parse "refs/tags/$TAG")" >> "$GITHUB_OUTPUT"
+
+      - name: Install Linux build and packaging prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential python3 binutils xvfb python3-gi gir1.2-atspi-2.0 at-spi2-core xclip xdotool
+
+      - name: Setup pnpm
+        uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2
+        with:
+          install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: package.json
+          check-latest: true
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            mobile/pnpm-lock.yaml
+
+      - name: Use the release workflow's external node-gyp
+        run: |
+          npm install -g node-gyp@11.5.0
+          echo "npm_config_node_gyp=$(npm root -g)/node-gyp/bin/node-gyp.js" >> "$GITHUB_ENV"
+
+      - name: Install frozen dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: ./.github/actions/install-mobile-dependencies
+
+      - name: Build the fork desktop, CLI, and web payloads
+        run: pnpm run build:release
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+
+      - name: Build the SSH PTY slot at the supported glibc floor
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime="$(node config/scripts/orcad-distribution/prebuilds/build-orcad-prebuilds.mjs --slot=linux-x64-glibc --print-runtime)"
+          case "$runtime" in
+            "$GITHUB_WORKSPACE"/*) ;;
+            *) echo '::error::Pinned Node must be inside the mounted workspace.'; exit 1 ;;
+          esac
+          docker run --rm --init --user "$(id -u):$(id -g)" \
+            -e CI=true -e HOME=/tmp -e ORCA_BACKGROUND_LAUNCH=1 \
+            -e CC=gcc -e CXX=g++ -e PYTHON=/opt/python/cp312-cp312/bin/python3 \
+            -e PINNED_NODE="$runtime" \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -w "$GITHUB_WORKSPACE" \
+            quay.io/pypa/manylinux_2_28_x86_64@sha256:407f771c51a2c3e83ebe5a7970b4289ead3a6db21d9b9c089168775cad11d328 \
+            bash -euc 'export PATH="${PINNED_NODE%/*}:$PATH"; exec "$PINNED_NODE" config/scripts/orcad-distribution/prebuilds/build-orcad-prebuilds.mjs --slot=linux-x64-glibc'
+
+      - name: Build the fork Linux x64 glibc SSH deployment template
+        run: node config/scripts/orcad-distribution/template/build-orcad-template.mjs --targets linux-x64-glibc
+
+      - name: Package Linux x64 Debian artifact without upstream publication
+        run: |
+          node config/scripts/native-build/node-addons/ensure-native-runtime.mjs --runtime=electron
+          pnpm exec electron-builder --config config/electron-builder.config.cjs \
+            --linux deb --x64 --publish never \
+            -c.publish.owner=trevarj -c.publish.repo=orca -c.publish.releaseType=prerelease
+
+      - name: Verify the actual packaged Iroh and SSH runtime closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e "require('./config/scripts/orcad-distribution/template/verify-packaged-orcad-template.cjs').verifyPackagedOrcadTemplate('dist/linux-unpacked/resources', ['linux-x64-glibc'])"
+          ELECTRON_RUN_AS_NODE=1 dist/linux-unpacked/orca-ide -e '
+            const { createRequire } = require("node:module")
+            const { resolve } = require("node:path")
+            const desktop = createRequire(resolve("dist/linux-unpacked/resources/package.json"))
+            const server = createRequire(resolve("dist/linux-unpacked/resources/orcad-template/targets/linux-x64-glibc/package.json"))
+            for (const load of [desktop, server]) {
+              const { Endpoint, RelayMode } = load("@number0/iroh")
+              if (!Endpoint || !RelayMode) throw new Error("Packaged Iroh exports are missing")
+            }
+          '
+
+      - name: Stage checksum and provenance
+        shell: bash
+        env:
+          ASSET: ${{ steps.source.outputs.asset }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          test -s "dist/$ASSET"
+          mkdir release-assets
+          cp "dist/$ASSET" release-assets/
+          (
+            cd release-assets
+            sha256sum "$ASSET" > "$ASSET.sha256"
+          )
+          {
+            printf '# Orca Iroh fork — Linux x64\n\n'
+            printf -- '- Tag: %s\n- Source commit: %s\n' "$TAG" "$COMMIT"
+            printf -- '- Workflow: %s\n- Workflow commit: %s\n' "$WORKFLOW_REF" "$WORKFLOW_SHA"
+            printf -- '- Build: %s\n- Node: %s; pnpm: %s\n' "$RUN_URL" "$(node --version)" "$(pnpm --version)"
+            printf -- '- Electron: %s; Iroh: %s\n' "$(node -p "require('./package.json').devDependencies.electron")" "$(node -p "require('./package.json').dependencies['@number0/iroh']")"
+            printf '\nBuilt from the pinned fork checkout using the existing release and native packaging hooks. '
+            printf 'Includes the fork desktop/CLI/web payloads and a verified SSH deployment template for **linux-x64-glibc only**, including Iroh. '
+            printf 'Other SSH target platforms are not bundled. Installing this package does not change existing remote servers.\n\n'
+            printf 'This manual prerelease does not run the full upstream release-qualification matrix. '
+            printf 'No mutable latest/update manifests are published; no release or asset is overwritten.\n\n```text\n'
+            cat "release-assets/$ASSET.sha256"
+            printf '```\n'
+          } > release-assets/release-notes.md
+
+      - name: Keep the commit-scoped build artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: fork-linux-x64-${{ inputs.commit }}
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    if: github.repository == 'trevarj/orca'
+    needs: build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+      COMMIT: ${{ inputs.commit }}
+      TAG_OBJECT: ${{ needs.build.outputs.tag_object }}
+      ASSET: ${{ needs.build.outputs.asset }}
+    steps:
+      - name: Download this run's artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: fork-linux-x64-${{ inputs.commit }}
+          path: release-assets
+
+      - name: Publish a new tag-scoped fork prerelease
+        working-directory: release-assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)" == "$TAG_OBJECT" ]]
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$TAG_OBJECT" --jq .object.sha)" == "$COMMIT" ]]
+          sha256sum --check "$ASSET.sha256"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --draft --prerelease --latest=false --title "$TAG" --notes-file release-notes.md
+          gh release upload "$TAG" "$ASSET" "$ASSET.sha256" --repo "$GITHUB_REPOSITORY"
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false
+          printf 'Published [%s](https://github.com/%s/releases/tag/%s)\n\n' "$TAG" "$GITHUB_REPOSITORY" "$TAG" >> "$GITHUB_STEP_SUMMARY"
+          cat "$ASSET.sha256" >> "$GITHUB_STEP_SUMMARY"
