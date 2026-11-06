@@ -28,15 +28,19 @@ export class DirectConnectionLog {
     detail?: string,
     evidence?: Pick<ConnectionLogEntry, 'code' | 'path'>
   ): void => {
-    this.sink?.({
-      id: `log-${++this.sequence}-${Date.now()}`,
-      ts: Date.now(),
-      level,
-      message,
-      detail,
-      ...evidence,
-      path: evidence?.path ?? this.path
-    })
+    try {
+      this.sink?.({
+        id: `log-${++this.sequence}-${Date.now()}`,
+        ts: Date.now(),
+        level,
+        message,
+        detail,
+        ...evidence,
+        path: evidence?.path ?? this.path
+      })
+    } catch {
+      // Diagnostics must not interrupt authentication or close/reconnect cleanup.
+    }
   }
 
   emitWarning = (
