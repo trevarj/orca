@@ -102,8 +102,10 @@ function note(key: string, value: string | null, source: MirroredWriteSource): v
   }
 }
 
-// Page stores can resolve refused writes, so read back before mirroring.
-// Native-only callers may trust a successful mutation to avoid a fallible post-commit read.
+/**
+ * Reads back page-store writes before mirroring because resolved mutations may have been refused.
+ * Native-only callers may trust a successful commit and skip the fallible post-commit read.
+ */
 export function persistMirrored(
   key: string,
   value: string | null,

@@ -25,6 +25,7 @@ export class IrohFramedSocket extends EventEmitter {
     super()
   }
 
+  /** Queue complete frames in order; oversize payloads or write failures close the socket. */
   send(data: string | Buffer | Uint8Array, options?: { binary?: boolean }): void {
     if (this.readyState !== this.OPEN) {
       return
@@ -62,6 +63,7 @@ export class IrohFramedSocket extends EventEmitter {
   // Why: WS heartbeat pings are a no-op; idle reaper covers half-open peers.
   ping(): void {}
 
+  /** Close once, forwarding authentication close codes and reasons to the QUIC peer. */
   private shutdown(code?: number, reason?: string): void {
     if (this.closed) {
       return
@@ -79,6 +81,7 @@ export class IrohFramedSocket extends EventEmitter {
   }
 }
 
+/** Write bounded native chunks sequentially without interleaving frames. */
 export async function writeAllChunked(send: SendStream, bytes: Buffer): Promise<void> {
   let offset = 0
   while (offset < bytes.byteLength) {

@@ -69,6 +69,7 @@ export type PreparedLoadedProfileSettings = {
   normalizedProjectGroups: ProjectGroup[]
 }
 
+/** Prepare migrated profile settings, treating corrupt saved relay origins as Automatic. */
 export function prepareLoadedProfileSettings(
   parsed: PersistedState,
   defaults: PersistedState,

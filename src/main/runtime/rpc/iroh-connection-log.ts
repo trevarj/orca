@@ -1,8 +1,7 @@
 /** Compact remote id + path kind for accept logs (no secrets). */
 import { createHash } from 'node:crypto'
 
-// Why: the clientId is the device's long-lived bearer token — logs must never
-// carry it verbatim (users share logs in bug reports).
+/** Hash the bearer-token client ID into a stable log label without exposing it. */
 export function clientIdLogLabel(clientId: string | null): string {
   if (clientId === null) {
     return 'unauth'
@@ -10,6 +9,7 @@ export function clientIdLogLabel(clientId: string | null): string {
   return createHash('sha256').update(clientId).digest('hex').slice(0, 12)
 }
 
+/** Return a short public endpoint ID, tolerating unavailable native diagnostics. */
 export function remoteIdPrefix(connection: { remoteId?: () => { toString(): string } }): string {
   try {
     const id = connection.remoteId?.()?.toString() ?? ''
@@ -19,6 +19,7 @@ export function remoteIdPrefix(connection: { remoteId?: () => { toString(): stri
   }
 }
 
+/** Describe the selected QUIC path, or unknown when native path inspection fails. */
 export function connectionPathKind(connection: {
   paths?: () => { isSelected?: boolean; isRelay?: boolean; isIp?: boolean }[]
 }): string {

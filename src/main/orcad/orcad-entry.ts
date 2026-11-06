@@ -58,6 +58,10 @@ export async function startOrcad(options: OrcadOptions = {}): Promise<OrcadHandl
   return { readiness, managedStop: { version, runtimeId: readiness.runtimeId, instance }, stop }
 }
 
+/**
+ * Restore the headless runtime before starting RPC and publishing readiness.
+ * Register teardown as resources start and follow the profile's live iroh relay preference.
+ */
 async function startOrcadRuntime(
   options: OrcadOptions,
   registerCleanup: (cleanup: OrcadRuntimeCleanup) => void

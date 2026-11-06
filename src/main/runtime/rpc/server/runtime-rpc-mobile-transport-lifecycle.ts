@@ -11,6 +11,7 @@ import { UnpairedDeviceAuthThrottle } from '../unpaired-device-auth-throttle'
 import { RuntimeRpcWebSocketDispatch } from './runtime-rpc-websocket-dispatch'
 
 export class RuntimeRpcMobileTransportLifecycle extends RuntimeRpcWebSocketDispatch {
+  /** Honor the emergency kill switch except when tests explicitly inject endpoint binding. */
   private shouldStartIrohTransport(): boolean {
     // Why: iroh is on by default; ORCA_DISABLE_IROH=1 is the emergency kill switch.
     // An injected test bind always starts (vitest sets the kill switch globally
@@ -18,6 +19,7 @@ export class RuntimeRpcMobileTransportLifecycle extends RuntimeRpcWebSocketDispa
     return this.irohBindEndpoint !== undefined || process.env.ORCA_DISABLE_IROH !== '1'
   }
 
+  /** Validate the relay and fence stale pairing hints before scheduling an iroh-only rebind. */
   setIrohRelayUrl(value: string | null): Promise<void> {
     const relayUrl = parseIrohRelayUrl(value)
     if (relayUrl !== this.desiredIrohRelayUrl) {
@@ -34,6 +36,7 @@ export class RuntimeRpcMobileTransportLifecycle extends RuntimeRpcWebSocketDispa
     return this.ensureIrohRelayBinding()
   }
 
+  /** Serialize relay changes until the latest generation is applied or awaiting retry. */
   protected ensureIrohRelayBinding(): Promise<void> {
     if (!this.irohRebindPromise) {
       if (
@@ -58,12 +61,14 @@ export class RuntimeRpcMobileTransportLifecycle extends RuntimeRpcWebSocketDispa
     return this.irohRebindPromise
   }
 
+  /** Wait for active rebinds, including replacements queued by a concurrent preference change. */
   protected async waitForIrohRelayBinding(): Promise<void> {
     while (this.irohRebindPromise) {
       await this.irohRebindPromise
     }
   }
 
+  /** Replace only iroh, discarding stale binds and retrying transient but not SDK-load failures. */
   private async rebindIrohTransport(): Promise<void> {
     while (!this.stopping && this.appliedIrohRelayGeneration !== this.irohRelayGeneration) {
       const generation = this.irohRelayGeneration
@@ -134,7 +139,7 @@ export class RuntimeRpcMobileTransportLifecycle extends RuntimeRpcWebSocketDispa
     }
   }
 
-  // Direct/relay sockets share session wiring captured by brokers; swap transports within it during rebind or relay identity/binary/revocation state is lost.
+  /** Reuse shared session wiring so transport replacement preserves relay and revocation state. */
   protected ensureMobileSocketWiring(
     deviceRegistry: DeviceRegistry,
     e2eeKeypair: E2EEKeypair

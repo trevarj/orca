@@ -8,6 +8,10 @@ import { openIrohRpcClient } from './mobile-iroh-physical-link'
 import { hostHasIrohEndpoint, inferIrohPathMode } from './mobile-iroh-availability'
 import { setIrohHostStatus } from './mobile-iroh-host-status'
 
+/**
+ * Keeps RPC identity stable across reconnects, preferring native-only dialing for iroh-primary hosts.
+ * If the native module is unavailable, records that failure and uses the legacy endpoint.
+ */
 export function openHostLogicalClient(host: HostProfile, onLog: ConnectionLogSink): RpcClient {
   // Why: iroh pairings dial ONLY iroh — it discovers LAN paths itself (local
   // direct addrs), so a ws:// leg would just add noise and a dead dial
@@ -49,8 +53,7 @@ export function openHostLogicalClient(host: HostProfile, onLog: ConnectionLogSin
   return finalizeLogicalClient(logical, host, onLog)
 }
 
-// Why: supervisor lifecycle (foreground revival, recovery, teardown) is
-// identical for iroh-native and legacy first generations.
+/** Shares foreground recovery across transports and tears down lifecycle subscriptions on close. */
 function finalizeLogicalClient(
   logical: ReturnType<typeof createStableLogicalRpcClient>,
   host: HostProfile,

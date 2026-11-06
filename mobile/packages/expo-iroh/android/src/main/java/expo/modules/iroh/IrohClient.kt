@@ -71,6 +71,7 @@ internal class IrohClient(
     }
   }
 
+  /** Bind the local endpoint, retiring the previous one if its home relay changes. */
   suspend fun start(relayUrl: String?): String {
     val selected = parseHomeRelayUrl(relayUrl)
     val startGeneration = withContext(NonCancellable) {
@@ -91,6 +92,7 @@ internal class IrohClient(
     }
   }
 
+  /** Share one bind for this generation and dispose native results that arrive after stop. */
   private suspend fun ensureEndpoint(expectedGeneration: Long): Pair<Endpoint, Long> {
     val (task, epoch) = synchronized(lock) {
       check(!destroyed && generation == expectedGeneration) { "iroh_not_started" }
@@ -144,6 +146,7 @@ internal class IrohClient(
     }
   }
 
+  /** Register once to retire the endpoint when Android's default network changes. */
   private fun watchDefaultNetwork(androidContext: Context) {
     synchronized(lock) {
       check(!destroyed) { "iroh_not_started" }
@@ -155,6 +158,7 @@ internal class IrohClient(
     }
   }
 
+  /** Dial a peer with address hints and publish one bi-stream plus its lifecycle jobs. */
   suspend fun connect(endpointId: String, relayUrl: String?, addresses: List<String>): String {
     val connectGeneration = synchronized(lock) { generation }
     val id = endpointId.trim().lowercase()
@@ -213,6 +217,7 @@ internal class IrohClient(
     }
   }
 
+  /** Validate a base64 payload of at most 1 MiB and serialize its length-prefixed write. */
   suspend fun send(id: String, base64: String) {
     val live = live(id)
     require(base64.length <= ((IrohFraming.MAX_PAYLOAD + 2) / 3) * 4) { "iroh_frame_too_large" }
@@ -234,11 +239,13 @@ internal class IrohClient(
 
   suspend fun stop() = stop(null)
 
+  /** Serialize cancellation-safe cleanup, optionally ignoring an obsolete network generation. */
   private suspend fun stop(expectedGeneration: Long?) = withContext(NonCancellable) {
     // Serialize stop/destroy so scope cancellation cannot overtake an earlier bind cleanup.
     stopLock.withLock { stopLocked(expectedGeneration) }
   }
 
+  /** Retire state under [stopLock], join any bind, then release connections and endpoint handles. */
   private suspend fun stopLocked(expectedGeneration: Long?) {
     val retired = synchronized(lock) {
       if (expectedGeneration != null && generation != expectedGeneration) return
@@ -257,6 +264,7 @@ internal class IrohClient(
     retired.second?.let { bound -> try { bound.shutdown() } finally { bound.close() } }
   }
 
+  /** Permanently reject new work, unregister network monitoring, and finish cleanup before cancellation. */
   fun destroy() {
     val manager = synchronized(lock) {
       if (destroyed) return
@@ -276,6 +284,7 @@ internal class IrohClient(
     connections[id] ?: error("iroh_unknown_connection")
   }
 
+  /** Read bounded frames into base64 events; on failure, close using the peer's reason if available. */
   private suspend fun readFrames(live: LiveConnection) {
     try {
       while (currentCoroutineContext().isActive) {
@@ -297,6 +306,7 @@ internal class IrohClient(
     }
   }
 
+  /** Poll path snapshots every two seconds, emitting only changes and dropping failed connections. */
   private suspend fun pollPaths(live: LiveConnection) {
     try {
       var previous: Map<String, String>? = null
@@ -315,6 +325,7 @@ internal class IrohClient(
     }
   }
 
+  /** Label the selected path (or first available path) and describe all current routes. */
   private fun snapshot(live: LiveConnection): Map<String, String> {
     val paths = live.connection.paths()
     val selected = paths.firstOrNull { it.isSelected } ?: paths.firstOrNull()
@@ -330,11 +341,13 @@ internal class IrohClient(
     return mapOf("pathType" to type, "detail" to detail)
   }
 
+  /** Remove a connection before cleanup so competing close paths cannot tear it down twice. */
   private suspend fun drop(id: String, reason: String) {
     val live = synchronized(lock) { connections.remove(id) } ?: return
     teardown(live, reason)
   }
 
+  /** Cancel lifecycle jobs and release native handles without cancellation, optionally emitting closure. */
   private suspend fun teardown(live: LiveConnection, reason: String, notify: Boolean = true) = withContext(NonCancellable) {
     live.jobs.forEach { it.cancel() }
     try {
@@ -357,6 +370,7 @@ internal class IrohClient(
   }
 
   companion object {
+    /** Normalize an HTTPS relay origin; blank selects the preset, while non-root URLs are rejected. */
     internal fun parseHomeRelayUrl(value: String?): String? {
       val selected = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
       val uri = try {

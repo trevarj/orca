@@ -42,6 +42,10 @@ export class RpcClientSocketCloseController {
     }
   }
 
+  /**
+   * Releases the current session and schedules recovery unless closure was intentional or unauthorized.
+   * A late unauthorized close still rejects pairing within the same authentication generation.
+   */
   handle(session: RpcClientSocketSession, closeCode?: number): void {
     if (this.options.getCurrentSession() !== session) {
       if (

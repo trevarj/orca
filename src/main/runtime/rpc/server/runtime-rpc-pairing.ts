@@ -34,6 +34,7 @@ import {
 } from './runtime-rpc-pairing-types'
 
 export class RuntimeRpcPairing extends RuntimeRpcNetworkExposure {
+  /** Expose only the current relay generation's online endpoint, never a superseded bind. */
   getIrohStatus(): { bound: boolean; endpointId: string | null; relayUrl: string | null } {
     const endpointId =
       !this.stopping && this.appliedIrohRelayGeneration === this.irohRelayGeneration
@@ -46,6 +47,7 @@ export class RuntimeRpcPairing extends RuntimeRpcNetworkExposure {
     }
   }
 
+  /** Build bounded pairing dial hints only when the selected iroh endpoint is ready. */
   protected getIrohPairingTarget(): PairingIroh | null {
     const { endpointId } = this.getIrohStatus()
     if (!endpointId) {
@@ -85,6 +87,7 @@ export class RuntimeRpcPairing extends RuntimeRpcNetworkExposure {
     return this.pushUnregisterOutbox
   }
 
+  /** Store Relay bindings only for eligible mobile grants, revoking replaced credential families. */
   setMobileRelayBinding(deviceId: string, binding: RelayDeviceBinding): boolean {
     const current = this.deviceRegistry?.getDevice(deviceId)
     const pairingMode = this.deviceRegistry?.getMobilePairingConnectionMode(deviceId)
@@ -178,6 +181,7 @@ export class RuntimeRpcPairing extends RuntimeRpcNetworkExposure {
     return ws?.endpoint ?? null
   }
 
+  /** Persist pending credentials only after the requested transport and E2EE identity are ready. */
   createPairingOffer(args: {
     address?: string | null
     name?: string

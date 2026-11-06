@@ -172,6 +172,7 @@ export class MobileSocketWiring {
     return terminated
   }
 
+  /** Authenticate and dispatch E2EE frames, restricting iroh token and key auth to iroh mobile grants. */
   private handleRawMessage(
     transport: MobileSocketTransport,
     ws: WebSocket,

@@ -9,6 +9,7 @@ export function loadExpoIroh(): ExpoIrohApi {
   return require('@orca/expo-iroh') as ExpoIrohApi
 }
 
+/** Treats a missing or unloadable native module as unavailable without breaking transport imports. */
 export function expoIrohModuleLoads(): boolean {
   try {
     loadExpoIroh()
