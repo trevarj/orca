@@ -11172,7 +11172,7 @@
           "retrying": "重试",
           "relayCell": "中继单元",
           "irohTitle": "Iroh",
-          "irohDescription": "手机可使用蜂窝数据或任意 Wi‑Fi。无需登录、无需选择地址。直接 P2P（打洞直连），公共中继兜底。",
+          "irohDescription": "手机可使用蜂窝数据或任意 Wi‑Fi。无需登录、无需选择地址。直接 P2P（打洞直连），使用配置的主中继兜底。",
           "irohUnavailable": "传输不可用。请选择其他主中继或查看日志。",
           "relaySignInDetail": "将此桌面登录到 Orca，并通过 Orca 的服务器路由手机。LAN 无需账户。"
         },

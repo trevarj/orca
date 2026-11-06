@@ -1,6 +1,6 @@
 // Per-connection liveness timers for the iroh transport: a pre-auth deadline
 // (unauthenticated peers must complete E2EE quickly) and an idle reaper
-// (no inbound frames — QUIC keepalive covers the path, not the peer app).
+// (no authenticated read/write progress — QUIC keepalive covers the path, not the peer app).
 import type { IrohFramedSocket } from './iroh-framed-socket'
 
 export class IrohConnectionTimers {
@@ -42,7 +42,7 @@ export class IrohConnectionTimers {
     this.idle.set(socket, timer)
   }
 
-  /** Cancel the current inbound-idle deadline during reset or socket cleanup. */
+  /** Cancel the current idle deadline during reset or socket cleanup. */
   clearIdle(socket: IrohFramedSocket): void {
     const timer = this.idle.get(socket)
     if (timer) {
