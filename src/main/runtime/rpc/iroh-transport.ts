@@ -12,6 +12,7 @@ import {
   IROH_MOBILE_RPC_ALPN
 } from './iroh-frame-codec'
 import { loadOrCreateIrohEndpointSecret } from './iroh-endpoint-secret'
+import { bindIrohEndpoint } from './iroh-endpoint-bind'
 import { runIrohAcceptLoop } from './iroh-accept-loop'
 import { IrohConnectionTimers } from './iroh-connection-timers'
 import { type IrohFramedSocket, WRITE_CHUNK_BYTES } from './iroh-framed-socket'
@@ -149,15 +150,11 @@ export class IrohTransport implements RpcTransport, MobileSocketTransport {
       endpoint = bound.endpoint
       endpointId = bound.endpointId
     } else {
-      // Why: static imports would load the native addon even in processes that never bind.
-      const { Endpoint, RelayMode } = await import('@number0/iroh')
-      if (this.shutdown.signal.aborted) {
+      const bound = await bindIrohEndpoint(secretKey, alpn, relayUrl, this.shutdown.signal)
+      if (!bound) {
         return
       }
-      endpoint = await Endpoint.bind(
-        { secretKey, alpns: [alpn] },
-        relayUrl ? RelayMode.customFromUrls([relayUrl]) : undefined
-      )
+      endpoint = bound
     }
     if (this.shutdown.signal.aborted) {
       await endpoint.close().catch(() => {})

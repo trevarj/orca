@@ -103,22 +103,29 @@ export class MobileIrohFramedSocket {
     const connectionId = this.connectionId
     const b64 = uint8ToBase64(bytes)
     // Expo tasks can reach the native FIFO out of order; enqueue whole frames in JS.
-    this.sendQueue = this.sendQueue.then(async () => {
-      if (this.closed) {
-        return
-      }
-      try {
-        await loadExpoIroh().irohSend(connectionId, b64)
-        this.bufferedAmount = Math.max(0, this.bufferedAmount - byteLength)
-      } catch (error) {
-        this.bufferedAmount = 0
-        this.options.onLog?.(
-          'Iroh send failed',
-          error instanceof Error ? error.message : String(error)
-        )
-        this.fail(1011, 'iroh_send_failed')
-      }
-    })
+    this.sendQueue = this.sendQueue
+      .then(async () => {
+        if (this.closed) {
+          return
+        }
+        try {
+          await loadExpoIroh().irohSend(connectionId, b64)
+          this.bufferedAmount = Math.max(0, this.bufferedAmount - byteLength)
+        } catch (error) {
+          this.bufferedAmount = 0
+          try {
+            this.options.onLog?.(
+              'Iroh send failed',
+              error instanceof Error ? error.message : String(error)
+            )
+          } finally {
+            this.fail(1011, 'iroh_send_failed')
+          }
+        }
+      })
+      .catch((error) => {
+        console.error('[iroh]', 'send callback failed', error)
+      })
   }
 
   close(code?: number, reason?: string): void {
@@ -278,10 +285,13 @@ export class MobileIrohFramedSocket {
         // Module unavailable during teardown.
       }
     }
-    if (opts.signalError) {
-      this.onerror?.()
+    try {
+      if (opts.signalError) {
+        this.onerror?.()
+      }
+    } finally {
+      this.onclose?.({ code, reason })
     }
-    this.onclose?.({ code, reason })
   }
 }
 
