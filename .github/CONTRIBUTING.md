@@ -26,6 +26,154 @@ pnpm install
 pnpm dev
 ```
 
+### NixOS (x86_64 Linux)
+
+The locked flake supplies an FHS environment for upstream Electron and Android binaries,
+Node 24, Corepack (which selects the repository's pinned pnpm), JDK 17, and the Android
+SDK/NDK. Run these commands from the checkout:
+
+```bash
+nix run .#shell -- -c \
+  'pnpm install --frozen-lockfile && pnpm --dir mobile install --frozen-lockfile && pnpm run build:desktop'
+
+# Compile the SSH PTY module with pre-2.42 glibc headers and linker.
+native_pkgs=github:NixOS/nixpkgs/50ab793786d9de88ee30ec4e4c24fb4236fc2674
+env -i HOME="$HOME" PATH="$PATH" nix shell --inputs-from . \
+  nixpkgs#nodejs_24 "$native_pkgs#gcc" "$native_pkgs#binutils" \
+  "$native_pkgs#gnumake" "$native_pkgs#python3" "$native_pkgs#gnutar" "$native_pkgs#gzip" \
+  --command env CC=gcc CXX=g++ node config/scripts/build-orcad-prebuilds.mjs --slot=linux-x64-glibc
+
+nix run .#shell -- -c \
+  'pnpm build:orcad && node config/scripts/build-orcad-template.mjs --targets linux-x64-glibc'
+nix run .
+```
+
+After building, `nix run .` from the checkout launches the compiled desktop with `pnpm start`.
+It requires the installed dependencies and existing desktop build. `nix build .` builds only
+the tool environment, not Orca; `pnpm run build:desktop` compiles the application. For a
+noninteractive command inside the FHS environment, use `nix run .#shell -- -c 'command'`.
+
+The desktop build alone does not include the server deployment template needed to set up
+SSH hosts or update their managed servers. The server-build commands above create
+`out/orcad-template` for **Linux x64 glibc SSH hosts only**; they do not enable macOS,
+Windows, ARM64, or musl hosts. Other targets require their matching verified native
+prebuild slots before building a template with the appropriate `--targets` value.
+Official release packaging requires every target. The fork-only Linux CI lane below
+explicitly packages this partial template; it does not expand SSH-host support.
+If Orca was already running when you added or rebuilt the template, restart it before
+reconnecting: managed-server update discovery caches a missing template for the session.
+The pinned native compiler keeps the SSH module within the supported glibc floor.
+Building it with the main shell's glibc 2.42+ headers is not compatible; do not bypass
+the ABI verifier. Use `nix develop` for an interactive desktop/Android FHS shell.
+
+Native Wayland copying additionally needs the clipboard helper. For local development,
+compile it inside `nix develop` before launching:
+
+```bash
+mkdir -p native/wayland-clipboard/.build/x64
+cc -O2 -Wall -Wextra -Werror -fstack-protector-strong \
+  -D_FORTIFY_SOURCE=2 -fPIE -pie -Wl,-z,relro,-z,now \
+  native/wayland-clipboard/wayland-clipboard.c \
+  native/wayland-clipboard/x11-clipboard-publisher.c -ldl \
+  -o native/wayland-clipboard/.build/x64/orca-wayland-clipboard
+```
+
+This host-built helper is for local use, not release packaging. Distribution builds still
+need the [Docker build](../native/wayland-clipboard/README.md#building-and-testing) to meet
+the supported glibc floor.
+
+To build a standalone Android APK after installing the mobile dependencies above:
+
+```bash
+nix develop
+cd mobile
+pnpm exec expo prebuild --platform android --no-install
+cd android
+NODE_ENV=production CMAKE_BUILD_PARALLEL_LEVEL=2 EXPO_PUBLIC_MOBILE_SHELL=native \
+  JAVA_TOOL_OPTIONS=-XX:ActiveProcessorCount=2 \
+  ./gradlew assembleRelease --no-daemon --no-parallel --max-workers=2 \
+  -Pkotlin.compiler.execution.strategy=in-process \
+  -Dorg.gradle.jvmargs="-Xmx2048m -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2"
+adb install -r app/build/outputs/apk/release/app-release.apk
+```
+
+`assembleRelease` bundles JavaScript and does not require Metro. The upstream template
+signs this APK with its debug key; it is suitable for sideloading, not production signing.
+`adb install -r` requires a compatible existing signing certificate; do not uninstall an
+existing app just to bypass a mismatch, since uninstalling deletes its data and pairing.
+The Android APK includes native Iroh via the official Android AAR. Native transport
+changes require rebuilding and reinstalling the APK, not only updating JavaScript.
+
+#### Iroh transport scope
+
+Iroh is a native mobile↔desktop QUIC transport, including Linux desktops and custom
+Android/iOS builds; web and Expo Go do not provide the native module. Android uses
+the official `computer.iroh:iroh-android:1.2.0` AAR (minimum API 24), not a stub.
+Iroh-only offers are rejected when the module is absent; only legacy offers with
+a real WebSocket endpoint can fall back.
+
+Desktop Iroh accepts only mobile-scope credentials whose stored pairing mode is
+`iroh`, not local-only, Orca Relay, or CLI/runtime credentials. Its 128-connection
+limit includes reserved pending handshakes/stream opens. Supplementary Iroh startup
+does not block Unix/WebSocket discovery while waiting for relay readiness, though
+Iroh pairing requests still await readiness; fully offline-LAN Iroh operation is
+not established. Unreadable identity files fail without replacing the existing
+endpoint secret. Native auth rejection **4001** is preserved even before dial
+completion, so a required re-pair is not mistaken for an ordinary reconnect.
+
+This extends [original PR #11267](https://github.com/stablyai/orca/pull/11267),
+which reported physical iPhone testing but initially had incomplete Android support.
+The user's [Android comparison](https://github.com/stablyai/orca/pull/11267#issuecomment-6412497586)
+and [follow-up](https://github.com/stablyai/orca/pull/11267#issuecomment-6434246311)
+report x86_64 NixOS/physical Android pairing, authenticated RPC, Wi-Fi/cellular
+handover, and live relay changes on their earlier local checkout—not a retest of
+upstream `cd79abcdee` or the current review fixes. Swift changes were source-reviewed
+only, not built or run on Linux; these historical results are not new verification.
+
+#### Iroh relay selection
+
+Choose the local device's home relay at runtime:
+
+- **Desktop:** Settings → Mobile → **Iroh home relay**.
+- **Mobile:** home gear → Settings → **Iroh relay**.
+
+Each device saves its own preference, available even offline or when Iroh is
+unavailable. **Automatic** stores no override and uses the SDK defaults. Choose
+**Europe**, **US East**, **US West**, **Asia / Singapore**, or **Custom**. A custom
+value must be a bare HTTPS origin without credentials, paths, queries, or fragments
+(for example, `https://aps1-1.relay.n0.iroh.link./`).
+
+The persisted keys are desktop `mobileIrohRelayUrl` and mobile
+`orca:irohHomeRelayUrl`. Android/iOS use `irohStart(homeRelayUrl: string | null)`;
+`null` selects Automatic, and explicit values are canonical HTTPS origins.
+
+Changing the preference reconnects only Iroh; WebSocket and OrcaRelay connections
+are unchanged. Desktop rebinds its endpoint and refreshes the displayed pairing
+QR without unpairing devices or rotating pairing credentials. A phone's saved
+remote desktop relay hint is separate from its own home-relay preference: if the
+old hint is blocked, rescan the refreshed desktop Iroh QR.
+
+Existing Android installs need one native APK upgrade for this runtime API;
+subsequent relay changes need no rebuild. Direct/LAN paths remain enabled.
+An HTTPS response or WebSocket upgrade does not prove peer traffic can pass;
+test reachability from both devices rather than assuming a region bypasses filtering.
+
+#### Fork Linux prereleases
+
+The fork's [`fork-linux-release.yml`](workflows/fork-linux-release.yml) workflow is
+manually dispatched with required inputs `tag` (`iroh-v<package.version>-YYYYMMDD`)
+and `commit` (the full 40-character commit hash). Create and push the signed,
+annotated tag first; it must resolve to that commit. The workflow publishes a
+create-once prerelease containing `dist/orca-ide_<version>_amd64.deb` and its
+`.sha256` checksum, without `latest` aliases or update manifests.
+
+This lane builds its own **linux-x64-glibc-only** SSH template using
+`ORCA_LINUX_X64_ONLY_TEMPLATE=1` and `ORCA_REQUIRE_ORCAD_TEMPLATE=1`; official
+all-target validation remains the default. Neither a successful package build nor
+publication proves physical-device Iroh connectivity. Native Android changes still
+require a rebuilt/reinstalled APK; runtime relay preference changes do not after
+the native API upgrade described above.
+
 ### Dev Profiles and Parallel Instances
 
 `pnpm dev` in a linked Git worktree uses its own userData profile, renderer port, and remote
