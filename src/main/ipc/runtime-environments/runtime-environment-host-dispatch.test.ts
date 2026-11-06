@@ -315,11 +315,11 @@ describe('runtimeEnvironments:remove for a managed server saved twice', () => {
     name: 'Managed (alias)',
     orcadDeployment: { ...HOSTS.sshManaged.orcadDeployment, sshTargetId: 't3' }
   }
-  const forget = vi.fn<ManagedServerActions['forget']>()
+  const forget = vi.fn<ManagedServerActions['forgetRedundant']>()
 
   beforeEach(() => {
     // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: removal only forgets.
-    registerManagedServerActions({ forget } as unknown as ManagedServerActions)
+    registerManagedServerActions({ forgetRedundant: forget } as unknown as ManagedServerActions)
     useHost('sshManaged')
   })
 
