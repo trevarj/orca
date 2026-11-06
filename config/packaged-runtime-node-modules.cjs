@@ -26,6 +26,7 @@ const requireFromProject = createRequire(join(projectDir, 'package.json'))
 const PACKAGED_RUNTIME_PACKAGE_ROOTS = [
   '@anthropic-ai/claude-agent-sdk',
   '@linear/sdk',
+  '@number0/iroh',
   '@orca/process-host',
   '@parcel/watcher',
   'electron-updater',
@@ -201,13 +202,14 @@ function collectPackagedRuntimePackages(electronPlatformName = process.platform)
     visit(packageName)
   }
 
-  // @parcel/watcher loads native optional subpackages absent from dependency traversal; include installed target variants, then afterPack prunes foreign binaries.
-  const parcelWatcherDir = packages.get('@parcel/watcher')
-  if (parcelWatcherDir) {
-    const parcelWatcherPackage = JSON.parse(
-      readFileSync(join(parcelWatcherDir, 'package.json'), 'utf8')
-    )
-    for (const optionalName of Object.keys(parcelWatcherPackage.optionalDependencies ?? {})) {
+  // Native optional subpackages are absent from dependency traversal; include installed variants, then afterPack prunes foreign binaries.
+  for (const napiRootName of ['@parcel/watcher', '@number0/iroh']) {
+    const napiRootDir = packages.get(napiRootName)
+    if (!napiRootDir) {
+      continue
+    }
+    const napiRootPackage = JSON.parse(readFileSync(join(napiRootDir, 'package.json'), 'utf8'))
+    for (const optionalName of Object.keys(napiRootPackage.optionalDependencies ?? {})) {
       try {
         visit(optionalName)
       } catch {
@@ -504,6 +506,79 @@ function prunePackagedParcelWatcher(resourcesDir, electronPlatformName, electron
   }
 }
 
+const IROH_NAPI_PLATFORM_PREFIX_BY_PLATFORM = {
+  darwin: 'iroh-darwin-',
+  linux: 'iroh-linux-',
+  win32: 'iroh-win32-'
+}
+
+function assertPackagedIrohNativeVariantInstalled(
+  electronPlatformName,
+  electronArch,
+  nodeModulesDir = join(projectDir, 'node_modules')
+) {
+  const architecture = normalizeElectronArchitecture(electronArch)
+  const suffix =
+    electronPlatformName === 'linux'
+      ? architecture === 'arm'
+        ? '-gnueabihf'
+        : '-gnu'
+      : electronPlatformName === 'win32'
+        ? '-msvc'
+        : ''
+  const packageName = `@number0/iroh-${electronPlatformName}-${architecture}${suffix}`
+  const loader = JSON.parse(
+    readFileSync(join(nodeModulesDir, '@number0', 'iroh', 'package.json'), 'utf8')
+  )
+  if (!Object.hasOwn(loader.optionalDependencies ?? {}, packageName)) {
+    console.warn(
+      `[packaged-iroh] @number0/iroh ${loader.version} does not publish ${packageName}; ` +
+        `Iroh is unavailable on ${electronPlatformName}/${architecture}.`
+    )
+    return
+  }
+  const packageDir = join(nodeModulesDir, packageName)
+  const manifestPath = join(packageDir, 'package.json')
+  if (!existsSync(manifestPath)) {
+    throw new Error(`Packaging Iroh requires ${packageName}; run pnpm install:release.`)
+  }
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  if (
+    typeof manifest.main !== 'string' ||
+    !manifest.main.endsWith('.node') ||
+    !existsSync(join(packageDir, manifest.main))
+  ) {
+    throw new Error(`Packaging Iroh requires the native .node binary from ${packageName}.`)
+  }
+}
+
+function prunePackagedIrohNapi(resourcesDir, electronPlatformName, electronArch) {
+  const scopeDir = join(resourcesDir, 'node_modules', '@number0')
+  if (!existsSync(scopeDir)) {
+    return
+  }
+  // Why: mirrors prunePackagedParcelWatcher — every installed platform
+  // subpackage ships in the copy step; each build only needs its own.
+  const keepPrefix = IROH_NAPI_PLATFORM_PREFIX_BY_PLATFORM[electronPlatformName]
+  const architecture = normalizeElectronArchitecture(electronArch)
+  const targetPrefix = keepPrefix ? `${keepPrefix}${architecture}` : null
+  for (const entry of readdirSync(scopeDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name === 'iroh') {
+      continue
+    }
+    if (!entry.name.startsWith('iroh-')) {
+      continue
+    }
+    if (
+      targetPrefix &&
+      (entry.name === targetPrefix || entry.name.startsWith(`${targetPrefix}-`))
+    ) {
+      continue
+    }
+    rmSync(join(scopeDir, entry.name), { recursive: true, force: true })
+  }
+}
+
 // Declarations are compile-only; dependency maps embed unused sources (megabytes for Linear). Orca main maps ship separately.
 function isPrunableTypeOrSourceMapArtifact(filename) {
   return TYPE_DECLARATION_ARTIFACT_RE.test(filename) || JS_SOURCE_MAP_ARTIFACT_RE.test(filename)
@@ -552,6 +627,7 @@ function prunePackagedZodSources(resourcesDir) {
 // Fail missing target natives: electron-builder only warns for absent extraResources and could ship host-only installs as foreign slices.
 function assertPackagedNativeVariantsInstalled(electronPlatformName, electronArch) {
   const architecture = normalizeElectronArchitecture(electronArch)
+  assertPackagedIrohNativeVariantInstalled(electronPlatformName, architecture)
   const nodeModulesDir = join(projectDir, 'node_modules')
   const isInstalled = (name) => existsSync(join(nodeModulesDir, name, 'package.json'))
   const missing = []
@@ -631,6 +707,7 @@ function prunePackagedRuntimeNodeModules(resourcesDir, electronPlatformName, ele
   adoptPackagedNativeBuildEntries(resourcesDir, electronPlatformName, architecture)
   prunePackagedNodePty(resourcesDir, electronPlatformName, architecture)
   prunePackagedParcelWatcher(resourcesDir, electronPlatformName, architecture)
+  prunePackagedIrohNapi(resourcesDir, electronPlatformName, architecture)
   // Why before the filename walk: zod/src is deleted wholesale, so walking it first is wasted work.
   prunePackagedZodSources(resourcesDir)
   prunePackagedRuntimeTypeAndSourceMapArtifacts(resourcesDir)
@@ -651,6 +728,7 @@ function pruneMatchingFiles(directory, shouldPrune) {
 module.exports = {
   PACKAGED_RUNTIME_PACKAGE_ROOTS,
   WINDOWS_PACKAGED_RUNTIME_PACKAGE_ROOTS,
+  assertPackagedIrohNativeVariantInstalled,
   assertPackagedNativeVariantsInstalled,
   assertProcessHostOutputBuilt,
   createPackagedRuntimeNodeModuleResources,
@@ -658,6 +736,7 @@ module.exports = {
   isPackagedExternalSpecifier,
   normalizeNodePtyWindowsArch,
   packageNameFromSpecifier,
+  prunePackagedIrohNapi,
   prunePackagedNodePty,
   prunePackagedParcelWatcher,
   prunePackagedRuntimeNodeModules,

@@ -28,6 +28,7 @@ import { normalizeUiLanguage } from '../../../shared/ui-language'
 import { normalizeWorktreeVisibilityDefaults } from '../../../shared/external-worktree-visibility'
 import { normalizePRBotAuthorOverrides } from '../../../shared/source-control/review-comments/pr-bot-author-overrides'
 import { normalizeMachineName } from '../../../shared/machine-name'
+import { parseIrohRelayUrl } from '../../../shared/iroh-relay-preference'
 import type { PersistedState } from '../../../shared/persisted-state-types'
 import {
   addMobilePairingCustomAddress,
@@ -203,6 +204,9 @@ export function updateSettings(
   }
   if ('machineName' in updates) {
     sanitizedUpdates.machineName = normalizeMachineName(updates.machineName)
+  }
+  if ('mobileIrohRelayUrl' in updates) {
+    sanitizedUpdates.mobileIrohRelayUrl = parseIrohRelayUrl(updates.mobileIrohRelayUrl)
   }
   if ('mobilePairingCustomAddress' in updates) {
     sanitizedUpdates.mobilePairingCustomAddress = normalizeMobilePairingCustomAddress(

@@ -51,7 +51,7 @@ const mocks = vi.hoisted(() => {
   }
 })
 
-vi.mock('@/store/index', () => ({ useAppStore: mocks.useAppStore }))
+vi.mock('@/store', () => ({ useAppStore: mocks.useAppStore }))
 vi.mock('../../../store/index', () => ({ useAppStore: mocks.useAppStore }))
 
 vi.mock('@/i18n/i18n', () => ({ translate: (_key: string, fallback: string) => fallback }))
@@ -237,5 +237,46 @@ describe('MobilePane pairing connection mode', () => {
 
     await waitFor(() => expect(screen.getByTestId('mode')).toHaveTextContent('local-only'))
     expect(screen.getByTestId('qr')).toHaveTextContent('none')
+  })
+
+  it('copies useful Relay diagnostics without disclosing the selected address or local interfaces', async () => {
+    mocks.holder.state.settings.mobilePairingCustomAddress = '100.126.117.25:6768'
+    mocks.listNetworkInterfaces.mockResolvedValue({
+      interfaces: [{ name: 'Wi-Fi', address: '192.168.1.24' }]
+    })
+    mocks.getPairingQR.mockResolvedValue({
+      available: false,
+      reason: 'relay_mint_failed',
+      relayFailure: {
+        code: 'relay_mint_failed',
+        stage: 'create_pairing_relay',
+        message: 'Relay pairing invite request failed'
+      }
+    })
+    const user = userEvent.setup()
+    render(<MobilePane />)
+    expect(screen.getByTestId('selected-address')).toHaveTextContent('100.126.117.25:6768')
+    await user.click(screen.getByRole('button', { name: 'Generate' }))
+    await user.click(await screen.findByRole('button', { name: 'Copy diagnostics' }))
+
+    const writeClipboardText = vi.mocked(window.api.ui.writeClipboardText)
+    await waitFor(() =>
+      expect(writeClipboardText).toHaveBeenCalledWith(
+        expect.stringContaining('"mobile_pairing_relay_failure"')
+      )
+    )
+    const copied = writeClipboardText.mock.calls[0]![0]
+    const diagnostics = JSON.parse(copied)
+    expect(diagnostics).toMatchObject({
+      kind: 'mobile_pairing_relay_failure',
+      preferredConnectionMode: 'automatic',
+      failure: {
+        code: 'relay_mint_failed',
+        stage: 'create_pairing_relay'
+      }
+    })
+    expect(diagnostics).not.toHaveProperty('selectedAddress')
+    expect(copied).not.toContain('100.126.117.25')
+    expect(copied).not.toContain('192.168.1.24')
   })
 })
