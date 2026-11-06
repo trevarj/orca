@@ -22,6 +22,7 @@ const {
   assertProcessHostOutputBuilt,
   createPackagedRuntimeNodeModuleResources,
   prunePackagedRuntimeNodeModules,
+  stagePackagedIrohNative,
   verifyPackagedMainRuntimeDeps
 } = require('./packaged-runtime-node-modules.cjs')
 const {
@@ -388,6 +389,7 @@ module.exports = {
   },
   // electron-builder calls this with the context alone. The second parameter is the bundle root,
   // so a test can point the guard at a scratch bundle instead of needing the repo's out/ built.
+  /** Reject unsupported template targets and missing release inputs before packaging resources. */
   beforePack: (
     context,
     mobileWebBundleDir = MOBILE_WEB_BUNDLE_DIR,
@@ -411,6 +413,7 @@ module.exports = {
       ensureWaylandClipboard(context.arch)
     }
   },
+  /** Finalize copied target-native resources and the deployment template before app signing. */
   afterPack: async (context) => {
     const resourcesDir =
       context.electronPlatformName === 'darwin'
@@ -451,6 +454,7 @@ module.exports = {
     }
     stampPackagedCliVersion(resourcesDir, context.packager.appInfo.version)
     prunePackagedRuntimeNodeModules(resourcesDir, context.electronPlatformName, context.arch)
+    await stagePackagedIrohNative(resourcesDir, context.electronPlatformName, context.arch)
     assertPackagedIrohNativeVariantInstalled(
       context.electronPlatformName,
       context.arch,

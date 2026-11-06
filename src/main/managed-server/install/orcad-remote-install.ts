@@ -25,6 +25,10 @@ import {
   isRemoteInstallComplete
 } from './remote-versioned-install'
 
+/**
+ * Reuse a complete target slot, or upload and finalize it under the remote install lock.
+ * Preserve lock ownership when interrupted SSH work cannot be confirmed stopped.
+ */
 export async function installOrcadBundle(
   options: {
     conn: OrcadHostTransport

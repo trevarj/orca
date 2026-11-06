@@ -18,6 +18,7 @@ type SecretFile = {
   secretKeyB64: string
 }
 
+/** Reuse the durable identity, replacing malformed secrets but never unreadable files. */
 export function loadOrCreateIrohEndpointSecret(userDataPath: string): number[] {
   const filePath = join(userDataPath, IROH_ENDPOINT_SECRET_FILENAME)
 

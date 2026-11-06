@@ -67,6 +67,11 @@ export function computeRemoteInstallDir(
   )
 }
 
+/**
+ * Check the completion marker and host/target-specific required artifacts.
+ * Treat ordinary probe failures as incomplete; propagate aborts and unconfirmed termination,
+ * plus session-limit errors when requested.
+ */
 export async function isRemoteInstallComplete(
   conn: RemoteInstallTransport,
   model: RemoteInstallModel,

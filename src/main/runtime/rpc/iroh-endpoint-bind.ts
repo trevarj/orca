@@ -9,6 +9,7 @@ export class IrohModuleLoadError extends Error {
   }
 }
 
+/** Lazily load the SDK and bind the selected relay; return null if already aborted. */
 export async function bindIrohEndpoint(
   secretKey: number[],
   alpn: number[],

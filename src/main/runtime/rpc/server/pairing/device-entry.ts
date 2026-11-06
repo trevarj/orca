@@ -152,6 +152,7 @@ export function findPrincipalDevice(
     : null
 }
 
+/** Normalize mobile grants' saved mode; non-mobile grants have no mobile transport policy. */
 export function mobilePairingConnectionModeOf(
   device: DeviceEntry | null
 ): MobilePairingConnectionMode | null {

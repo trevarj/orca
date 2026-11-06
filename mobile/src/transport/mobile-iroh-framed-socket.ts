@@ -11,6 +11,7 @@ let requestedHomeRelayUrl: string | null | undefined
 let relayRevision = 0
 let startingRevision: number | null = null
 
+/** Interrupts a pending native bind and waits for its stop before allowing another endpoint start. */
 function interruptEndpointStart(): void {
   let stopped: Promise<void>
   try {
@@ -24,6 +25,7 @@ function interruptEndpointStart(): void {
   endpointStartBarrier = Promise.all([endpointStartBarrier, stopped]).then(() => {})
 }
 
+/** Watches relay changes while sockets exist, closing them through RPC's normal reconnect path. */
 function trackSocket(socket: MobileIrohFramedSocket): void {
   activeSockets.add(socket)
   unsubscribeRelayPreference ??= subscribeMirroredKey(IROH_HOME_RELAY_URL_KEY, (value) => {
@@ -40,6 +42,7 @@ function trackSocket(socket: MobileIrohFramedSocket): void {
   })
 }
 
+/** Removes the shared preference listener and interrupts a pending bind when the last socket closes. */
 function untrackSocket(socket: MobileIrohFramedSocket): void {
   activeSockets.delete(socket)
   if (activeSockets.size === 0) {
@@ -93,6 +96,10 @@ export class MobileIrohFramedSocket {
     void this.dial()
   }
 
+  /**
+   * Queues complete frames in call order; sends outside OPEN are ignored.
+   * Native send failure clears buffered bytes and closes the socket with code 1011.
+   */
   send(data: string | ArrayBuffer | ArrayBufferView): void {
     if (this.readyState !== this.OPEN || !this.connectionId || this.closed) {
       return
@@ -133,6 +140,10 @@ export class MobileIrohFramedSocket {
     this.shutdown(code ?? 1000, reason ?? 'client_close', { signalError: false })
   }
 
+  /**
+   * Serializes endpoint startup using the latest relay preference, then dials the paired host.
+   * Closed or superseded starts never open; native closes received during connect retain their reason.
+   */
   private async dial(): Promise<void> {
     try {
       const iroh = loadExpoIroh()
@@ -223,6 +234,7 @@ export class MobileIrohFramedSocket {
     }
   }
 
+  /** Delivers only this connection's messages and path updates while the socket remains live. */
   private bindNativeEvents(iroh: ExpoIrohApi, connectionId: string): void {
     this.unsubMessage = iroh.onIrohMessage((event) => {
       if (event.connectionId !== connectionId || this.closed) {
@@ -244,6 +256,7 @@ export class MobileIrohFramedSocket {
     })
   }
 
+  /** Preserves the desktop's 4001 auth rejection so RPC requests re-pairing instead of reconnecting. */
   private handleNativeClose(reason: string): void {
     console.log('[iroh]', 'session_closed', { reason })
     // Why: the desktop closes QUIC with the WS auth code; surfacing 4001 lets
@@ -260,6 +273,10 @@ export class MobileIrohFramedSocket {
     this.shutdown(code, reason, { signalError: code !== 1000 })
   }
 
+  /**
+   * Closes once, detaches native listeners, and releases the connection best-effort.
+   * Delivers onclose even when an onerror handler throws.
+   */
   private shutdown(code: number, reason: string, opts: { signalError: boolean }): void {
     if (this.closed) {
       return
@@ -295,6 +312,7 @@ export class MobileIrohFramedSocket {
   }
 }
 
+/** UTF-8 encodes text and preserves binary view offsets without copying the underlying bytes. */
 function toUint8Array(data: string | ArrayBuffer | ArrayBufferView): Uint8Array {
   if (typeof data === 'string') {
     return new TextEncoder().encode(data)
@@ -305,7 +323,7 @@ function toUint8Array(data: string | ArrayBuffer | ArrayBufferView): Uint8Array 
   return new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
 }
 
-// Why: desktop decodeIrohFramePayload treats pure ASCII as text (JSON/base64 E2EE).
+/** Matches desktop ASCII text detection; non-text frames remain opaque bytes for E2EE decoding. */
 function decodeIrohPayload(payload: Uint8Array): string | Uint8Array {
   for (let i = 0; i < payload.byteLength; i++) {
     const byte = payload[i]!
@@ -320,6 +338,7 @@ function decodeIrohPayload(payload: Uint8Array): string | Uint8Array {
 // concat is O(n) allocations on Hermes.
 const BASE64_CHUNK = 0x8000
 
+/** Base64-encodes bridge frames with bounded fromCharCode calls, including large Hermes frames. */
 function uint8ToBase64(bytes: Uint8Array): string {
   const parts: string[] = []
   for (let i = 0; i < bytes.length; i += BASE64_CHUNK) {
@@ -328,6 +347,7 @@ function uint8ToBase64(bytes: Uint8Array): string {
   return btoa(parts.join(''))
 }
 
+/** Restores native bridge bytes, propagating malformed base64 errors from atob. */
 function base64ToUint8(b64: string): Uint8Array {
   const binary = atob(b64)
   const out = new Uint8Array(binary.length)

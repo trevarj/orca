@@ -2,38 +2,28 @@ import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { ORCAD_IROH_DIR } from '../../../../src/shared/orcad-artifacts.ts'
-import { materializeNativePackage } from './orcad-native-package.mjs'
+import { verifyIrohPrebuild } from '../prebuilds/iroh-prebuild.mjs'
+import { readManifest } from '../prebuilds/orcad-prebuild-slot-contents.mjs'
 
-export async function stageOrcadIroh(root, outputDir, target) {
+/** Stage the pinned loader with its verified Linux x64 floor artifact; other targets omit iroh. */
+export async function stageOrcadIroh(root, outputDir, target, prebuildsDir) {
   if (target !== 'linux-x64-glibc') {
     return
   }
   try {
+    if (!prebuildsDir) {
+      throw new Error('A verified Iroh prebuild directory is required')
+    }
     const require = createRequire(join(root, 'package.json'))
     const packagePath = require.resolve('@number0/iroh/package.json')
     const sourceDir = dirname(packagePath)
     const metadata = JSON.parse(readFileSync(packagePath, 'utf8'))
-    let nativeSource
-    try {
-      const nativePackagePath = createRequire(packagePath).resolve(
-        '@number0/iroh-linux-x64-gnu/package.json'
-      )
-      const nativeMetadata = JSON.parse(readFileSync(nativePackagePath, 'utf8'))
-      if (typeof nativeMetadata.main !== 'string' || !nativeMetadata.main) {
-        throw new Error('@number0/iroh-linux-x64-gnu/package.json declares no native main')
-      }
-      nativeSource = join(dirname(nativePackagePath), nativeMetadata.main)
-    } catch (cause) {
-      if (cause.code !== 'MODULE_NOT_FOUND') {
-        throw cause
-      }
-      nativeSource = await materializeNativePackage({
-        root,
-        name: '@number0/iroh-linux-x64-gnu',
-        version: metadata.version,
-        filename: 'iroh.linux-x64-gnu.node'
-      })
-    }
+    const nativeSource = verifyIrohPrebuild({
+      slotDir: join(prebuildsDir, target),
+      slot: target,
+      entry: readManifest(prebuildsDir)?.slots?.[target],
+      version: metadata.version
+    })
     const destination = join(outputDir, ORCAD_IROH_DIR)
     mkdirSync(destination, { recursive: true })
     // Keep the loader's explicit CJS exports for dynamic import's named exports.
@@ -46,7 +36,7 @@ export async function stageOrcadIroh(root, outputDir, target) {
     )
   } catch (cause) {
     throw new Error(
-      `Cannot stage Orcad ${target} Iroh from @number0/iroh and lockfile-pinned @number0/iroh-linux-x64-gnu: ${cause.message}`,
+      `Cannot stage Orcad ${target} Iroh from @number0/iroh and its verified native floor prebuild: ${cause.message}`,
       { cause }
     )
   }

@@ -11,6 +11,7 @@ export class DirectConnectionLog {
   private sequence = 0
   private readonly path: MobileConnectionDiagnosticPath
 
+  /** Attributes diagnostics to the physical transport unless an individual entry overrides its path. */
   constructor(
     endpoint: string,
     private readonly sink?: ConnectionLogSink
@@ -22,6 +23,7 @@ export class DirectConnectionLog {
         : 'lan'
   }
 
+  /** Emits a path-attributed entry without allowing a diagnostic sink to interrupt RPC lifecycle work. */
   emit = (
     level: ConnectionLogLevel,
     message: string,

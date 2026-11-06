@@ -27,6 +27,7 @@ import type { PersistedState } from '../../../shared/persisted-state-types'
 import type { PreparedLoadedTerminalSettings } from './prepare-loaded-terminal-settings'
 import type { PreparedLoadedProfileSettings } from './prepare-loaded-profile-settings'
 
+/** Build global settings from defaults and persisted values, applying prepared terminal/profile migrations. */
 export function normalizeLoadedGlobalSettings(
   parsed: PersistedState,
   terminal: PreparedLoadedTerminalSettings,

@@ -57,6 +57,10 @@ export type MobileHandlerDependencies = {
   getDefaultRouteInterfaceNames?: DefaultRouteInterfaceLookup
 }
 
+/**
+ * Register pairing, device access and transport diagnostics IPC.
+ * Iroh pairing ignores LAN address selection and uses the offer's key-based endpoint.
+ */
 export function registerMobileHandlers(
   rpcServer: OrcaRuntimeRpcServer,
   dependencies: MobileHandlerDependencies = {}
