@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { OrcaRuntimeService } from '../../orca-runtime'
 import { OrcaRuntimeRpcServer } from './runtime-rpc'
+import { IrohTransport } from '../iroh-transport'
 import { parsePairingCode } from '../../../../shared/remote-runtime/pairing/pairing'
 import { DEVICE_REGISTRY_FILENAME } from './pairing/mobile-pairing-files'
 import { E2EE_KEYPAIR_FILENAME } from '../../../../shared/remote-runtime/host-store/runtime-e2ee-keypair-file'
@@ -309,7 +310,11 @@ describe('OrcaRuntimeRpcServer', () => {
     }
   })
 
-  it('omits iroh from pairing offers when the kill switch disables the transport', async () => {
+  it('refuses Iroh pairing without attempting startup when the kill switch is enabled', async () => {
+    vi.stubEnv('ORCA_DISABLE_IROH', '1')
+    const start = vi
+      .spyOn(IrohTransport.prototype, 'start')
+      .mockRejectedValue(new Error('Iroh startup must remain disabled'))
     const userDataPath = mkdtempSync(join(tmpdir(), 'orca-runtime-rpc-'))
     const server = new OrcaRuntimeRpcServer({
       methods: [],
@@ -318,22 +323,23 @@ describe('OrcaRuntimeRpcServer', () => {
       enableWebSocket: true,
       wsPort: 0
     })
-    await server.start()
     try {
+      await server.start()
       const offer = await server.createMobilePairingOffer({
         address: '100.64.1.20',
         name: 'Mobile test',
-        connectionMode: 'local-only'
+        connectionMode: 'iroh'
       })
-      expect(offer.available).toBe(true)
-      if (!offer.available) {
-        throw new Error('pairing unavailable')
-      }
+      expect(offer.available).toBe(false)
       expect(server.getIrohStatus().bound).toBe(false)
-      const parsed = parsePairingCode(offer.pairingUrl)
-      expect(parsed).not.toHaveProperty('iroh')
+      expect(start).not.toHaveBeenCalled()
     } finally {
-      await server.stop()
+      try {
+        await server.stop()
+      } finally {
+        start.mockRestore()
+        vi.unstubAllEnvs()
+      }
     }
   })
 
