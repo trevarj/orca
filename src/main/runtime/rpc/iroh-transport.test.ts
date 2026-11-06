@@ -6,6 +6,7 @@ import type { Endpoint } from '@number0/iroh'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { encodeLengthPrefixedFrame } from './iroh-frame-codec'
 import { IROH_ENDPOINT_SECRET_FILENAME } from './iroh-endpoint-secret'
+import { IrohModuleLoadError } from './iroh-endpoint-bind'
 import { IrohTransport } from './iroh-transport'
 
 class FakeRecv {
@@ -249,6 +250,58 @@ describe('IrohTransport', () => {
     await vi.advanceTimersByTimeAsync(1)
     expect(fake.connection.close).toHaveBeenCalledOnce()
     expect(closed).toHaveBeenCalledWith('mobile-client', expect.anything(), false)
+  })
+
+  it('marks an SDK import failure as a permanent module load failure', async () => {
+    const userDataPath = mkdtempSync(join(tmpdir(), 'iroh-transport-'))
+    dirs.push(userDataPath)
+    vi.doMock('@number0/iroh', () => {
+      throw new Error('Native SDK unavailable')
+    })
+    const transport = new IrohTransport({ userDataPath })
+    transports.push(transport)
+
+    await expect(transport.start()).rejects.toBeInstanceOf(IrohModuleLoadError)
+    expect(transport.endpointId).toBeNull()
+    expect(transport.endpointDialHints()).toBeNull()
+  })
+
+  it('marks incompatible SDK exports as a permanent module load failure', async () => {
+    const userDataPath = mkdtempSync(join(tmpdir(), 'iroh-transport-'))
+    dirs.push(userDataPath)
+    vi.doMock('@number0/iroh', () => ({
+      Endpoint: { bind: null },
+      RelayMode: { customFromUrls: null }
+    }))
+    const transport = new IrohTransport({ userDataPath })
+    transports.push(transport)
+
+    await expect(transport.start()).rejects.toMatchObject({
+      name: 'IrohModuleLoadError',
+      cause: new TypeError('Iroh SDK does not expose the required endpoint and relay APIs')
+    })
+    expect(transport.endpointId).toBeNull()
+    expect(transport.endpointDialHints()).toBeNull()
+  })
+
+  it('does not classify a native socket bind failure as a permanent module load failure', async () => {
+    const userDataPath = mkdtempSync(join(tmpdir(), 'iroh-transport-'))
+    dirs.push(userDataPath)
+    const cause = new Error('Socket temporarily unavailable')
+    vi.doMock('@number0/iroh', () => ({
+      Endpoint: {
+        bind: async () => {
+          throw cause
+        }
+      },
+      RelayMode: { customFromUrls: (urls: string[]) => ({ urls }) }
+    }))
+    const transport = new IrohTransport({ userDataPath })
+    transports.push(transport)
+
+    await expect(transport.start()).rejects.toBe(cause)
+    expect(transport.endpointId).toBeNull()
+    expect(transport.endpointDialHints()).toBeNull()
   })
 
   it('keeps an explicit relay online failure failed without trying Automatic', async () => {

@@ -4,6 +4,7 @@ import { ORCA_LAYOUT_OWNER_IS_MAIN } from '../../../../shared/layout-owner-switc
 import { placeUnshownLiveTerminalsBestEffort } from '../../terminal/adoption/unshown-live-terminal-placement'
 import type { DeviceRegistry } from './pairing/device-registry'
 import type { E2EEKeypair } from '../../e2ee-keypair'
+import { IrohModuleLoadError } from '../iroh-endpoint-bind'
 import { IrohTransport } from '../iroh-transport'
 import { MobileSocketWiring } from '../mobile-socket-wiring'
 import { UnpairedDeviceAuthThrottle } from '../unpaired-device-auth-throttle'
@@ -104,10 +105,18 @@ export class RuntimeRpcMobileTransportLifecycle extends RuntimeRpcWebSocketDispa
         this.activeTransports.push(transport)
         this.appliedIrohRelayGeneration = generation
         this.irohRelayRetry.reset()
-      } catch {
-        console.error('[runtime] Failed to bind the selected Iroh relay')
+      } catch (error) {
+        console.error(
+          error instanceof IrohModuleLoadError
+            ? `[runtime] ${error.message}`
+            : '[runtime] Failed to bind the selected Iroh relay'
+        )
         await transport.stop().catch(() => {})
         if (!this.stopping && generation === this.irohRelayGeneration) {
+          if (error instanceof IrohModuleLoadError) {
+            this.appliedIrohRelayGeneration = generation
+            continue
+          }
           this.irohRelayRetry.schedule(1_000, () => {
             if (!this.stopping && generation === this.irohRelayGeneration) {
               void this.ensureIrohRelayBinding().catch(() => {

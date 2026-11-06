@@ -14,6 +14,7 @@ import {
 import { openIrohRpcClient } from './mobile-iroh-physical-link'
 import { connectMobileRelayRpcSession } from './mobile-relay-rpc-session'
 import { connect, type RpcClient } from './rpc-client'
+import { isRpcDeliveryUnknown } from './rpc-delivery-ambiguity'
 import { createStableLogicalRpcClient } from './stable-logical-rpc-client'
 import type { ConnectionState, HostProfile, RpcRequest } from './types'
 
@@ -547,3 +548,95 @@ it('delivers encrypted RPC bursts in issue order while a native send is pending 
     image: new Uint8Array([0xff, 0xd8, 0xff])
   })
 })
+
+it.each(['Transport closed', 'Iroh send failed'])(
+  'rejects pending encrypted RPCs and authenticates a replacement after native write failure when %s logging throws',
+  async (throwingMessage) => {
+    vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', WireSocket)
+    const keys = nacl.box.keyPair()
+    const identity: Identity = {
+      secretKey: keys.secretKey,
+      profile: {
+        id: 'recovering-host',
+        name: 'Recovering desktop',
+        endpoint: 'ws://recovering.invalid',
+        deviceToken: 'recovering-device',
+        publicKeyB64: Buffer.from(keys.publicKey).toString('base64'),
+        lastConnected: 1,
+        iroh: {
+          endpointId: '6'.repeat(64),
+          relayUrl: 'https://desktop.relay.invalid/',
+          directAddresses: []
+        }
+      }
+    }
+    const target = identity.profile.iroh!
+    nativeIdentities.set(target.endpointId, identity)
+    const logs: string[] = []
+    const client = openIrohRpcClient({
+      desktopEndpointId: target.endpointId,
+      dialHints: { relayUrl: target.relayUrl, directAddresses: target.directAddresses },
+      deviceToken: identity.profile.deviceToken,
+      publicKeyB64: identity.profile.publicKeyB64,
+      onLog: (entry) => {
+        logs.push(entry.message)
+        if (entry.message === throwingMessage) {
+          throw new Error('diagnostic sink failed')
+        }
+      }
+    })
+    expect(client).not.toBeNull()
+    clients.push(client!)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(client!.getState()).toBe('connected')
+    const original = [...nativePeers.values()].find((peer) => peer.identity === identity)!
+    const states: ConnectionState[] = []
+    client!.onStateChange((state) => states.push(state))
+    const entered = Promise.withResolvers<void>()
+    const failed = Promise.withResolvers<void>()
+    nativeSendGate = { entered: entered.resolve, wait: failed.promise }
+    const pending = Promise.allSettled([
+      client!.sendRequest('status.get', {}),
+      client!.sendRequest('worktree.ps', { limit: 1 })
+    ])
+    await entered.promise
+    await vi.advanceTimersByTimeAsync(0)
+    failed.reject(new Error('native write failed'))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(logs).toContain(throwingMessage)
+    expect(await pending).toEqual([
+      {
+        status: 'rejected',
+        reason: expect.objectContaining({ message: 'Connection interrupted' })
+      },
+      { status: 'rejected', reason: expect.objectContaining({ message: 'Connection interrupted' }) }
+    ])
+    for (const result of await pending) {
+      expect(result.status === 'rejected' && isRpcDeliveryUnknown(result.reason)).toBe(true)
+    }
+    expect(original.closed).toBe(true)
+    expect(original.requests.map((request) => request.method)).toEqual([
+      'runtime.clientCapabilities.update'
+    ])
+    expect(client!.getState()).toBe('reconnecting')
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(states).toEqual(['reconnecting', 'connecting', 'handshaking', 'connected'])
+    const replacement = [...nativePeers.values()].find(
+      (peer) => peer.identity === identity && !peer.closed
+    )!
+    expect(replacement).not.toBe(original)
+    expect(replacement.authenticated).toBe(true)
+    await expect(client!.sendRequest('status.get', {})).resolves.toEqual({
+      id: expect.any(String),
+      ok: true,
+      result: { path: 'iroh', homeRelayUrl: null }
+    })
+    expect(replacement.requests.map((request) => request.method)).toEqual([
+      'runtime.clientCapabilities.update',
+      'status.get'
+    ])
+  }
+)

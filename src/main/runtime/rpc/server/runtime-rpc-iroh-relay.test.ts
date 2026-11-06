@@ -9,6 +9,7 @@ import { OrcaRuntimeService } from '../../orca-runtime'
 import { OrcaRuntimeRpcServer } from './runtime-rpc'
 import { readRuntimeMetadata } from './runtime-metadata'
 import { STATUS_METHODS } from '../methods/host-management/status'
+import { IrohModuleLoadError } from '../iroh-endpoint-bind'
 import { sendRequest } from './runtime-rpc-test-harness'
 import {
   authenticateMobileWsSession,
@@ -342,6 +343,50 @@ describe('runtime Iroh home relay replacement', () => {
     } finally {
       staleOnline.resolve()
       await server.stop()
+    }
+  })
+
+  it('keeps a permanent SDK load failure unavailable across pairing requests and elapsed backoff', async () => {
+    let sdkAvailable = false
+    const server = new OrcaRuntimeRpcServer({
+      runtime: new OrcaRuntimeService(),
+      methods: [],
+      userDataPath: mkdtempSync(join(tmpdir(), 'orca-iroh-relay-')),
+      enableWebSocket: true,
+      wsPort: 0,
+      irohBindEndpoint: async () => {
+        if (!sdkAvailable) {
+          throw new IrohModuleLoadError(new Error('Native SDK unavailable'))
+        }
+        return controlledEndpoint('https://unexpected-retry.relay.test/')
+      }
+    })
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      await server.start()
+      await server.setIrohRelayUrl(null)
+      await expect(
+        server.createMobilePairingOffer({ connectionMode: 'iroh' })
+      ).resolves.toMatchObject({
+        available: false,
+        reason: 'iroh_unavailable'
+      })
+      sdkAvailable = true
+      await vi.advanceTimersByTimeAsync(300_000)
+      await expect(
+        server.createMobilePairingOffer({ connectionMode: 'iroh' })
+      ).resolves.toMatchObject({
+        available: false,
+        reason: 'iroh_unavailable'
+      })
+      await vi.advanceTimersByTimeAsync(300_000)
+      expect(server.getIrohStatus()).toEqual({ bound: false, endpointId: null, relayUrl: null })
+      expect(errors).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+      await server.stop()
+      errors.mockRestore()
     }
   })
 
