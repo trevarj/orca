@@ -44,6 +44,7 @@ function isCanonicalBase64Key(value: string): boolean {
   }
 }
 
+/** Validate v2 pairing offers, bounding iroh dial hints and enforcing Relay scope, key and expiry rules. */
 export function createPairingOfferSchema(now: () => number = () => Date.now()) {
   const relaySchema = z.object({
     v: z.literal(1),

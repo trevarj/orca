@@ -19,6 +19,7 @@ export class IrohConnectionTimers {
     this.preAuth.set(socket, timer)
   }
 
+  /** Cancel and forget the authentication deadline after acceptance or socket cleanup. */
   clearPreAuth(socket: IrohFramedSocket): void {
     const timer = this.preAuth.get(socket)
     if (timer) {
@@ -41,6 +42,7 @@ export class IrohConnectionTimers {
     this.idle.set(socket, timer)
   }
 
+  /** Cancel the current inbound-idle deadline during reset or socket cleanup. */
   clearIdle(socket: IrohFramedSocket): void {
     const timer = this.idle.get(socket)
     if (timer) {

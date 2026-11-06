@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 
 type RelayDraft = { source: string | null; custom: boolean; text: string; error: string | null }
 
+/** Edit this computer's durable home relay while reconciling external preference changes. */
 export function MobileIrohRelaySettingField(): React.JSX.Element {
   const source = useAppStore((state) => state.settings?.mobileIrohRelayUrl ?? null)
   const updateSettingsOrThrow = useAppStore((state) => state.updateSettingsOrThrow)
@@ -38,6 +39,7 @@ export function MobileIrohRelaySettingField(): React.JSX.Element {
     setDraft(current)
   }
 
+  /** Commit one preference write, retaining the previous selection if persistence fails. */
   const save = async (relayUrl: string | null): Promise<void> => {
     if (saving) {
       return
@@ -67,6 +69,7 @@ export function MobileIrohRelaySettingField(): React.JSX.Element {
     }
   }
 
+  /** Reject invalid or empty custom origins before invoking the settings writer. */
   const commitCustom = (): void => {
     let relayUrl: string | null
     try {

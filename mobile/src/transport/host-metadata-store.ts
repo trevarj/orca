@@ -24,6 +24,7 @@ export function writeStoredHostProfiles(hosts: readonly StoredHostProfile[]): Pr
   return AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(hosts))
 }
 
+/** Keeps reconnect metadata, including iroh hints, but excludes device credentials and relay overlay state. */
 export function toStoredHostProfile(host: HostProfile): StoredHostProfile {
   const {
     id,

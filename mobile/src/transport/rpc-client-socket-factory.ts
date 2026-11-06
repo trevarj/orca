@@ -39,6 +39,7 @@ export class RpcClientSocketFactory {
     this.framingPolicy = createDirectE2EEFramingPolicy(options.serverPublicKeyB64)
   }
 
+  /** Starts a fresh transport session, reusing the injected socket factory and E2EE framing policy. */
   open(): RpcClientSocketSession {
     const now = Date.now()
     const lastConnectedAt = this.options.getLastConnectedAt()

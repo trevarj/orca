@@ -27,6 +27,7 @@ function elapsedLooksFrozen(elapsedMs: number, timeoutMs: number): boolean {
   return elapsedMs > timeoutMs + SUSPENSION_SLACK_MS
 }
 
+/** Distinguishes delayed timer delivery after suspension from an ordinary connect or handshake timeout. */
 export function describeSocketDeadline(input: SocketDeadlineInput): SocketDeadlineReport {
   const elapsedMs = input.elapsedMs
   const suspended = elapsedLooksFrozen(elapsedMs, input.timeoutMs)

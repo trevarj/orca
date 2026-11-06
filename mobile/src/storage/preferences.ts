@@ -188,6 +188,10 @@ export function saveTerminalLinkOpenMode(mode: MobileTerminalLinkOpenMode): Prom
 let irohRelayWriteBarrier: Promise<void> | null = null
 let irohRelayWriteRevision = 0
 
+/**
+ * Waits for queued saves and retries reads superseded by a newer relay choice.
+ * Invalid stored URLs use the default relay (null); storage read failures propagate.
+ */
 export async function loadIrohHomeRelayUrl(): Promise<string | null> {
   for (;;) {
     const revision = irohRelayWriteRevision
@@ -216,6 +220,7 @@ export async function loadIrohHomeRelayUrl(): Promise<string | null> {
   }
 }
 
+/** Validates and serializes relay changes, propagating save failures without blocking later writes. */
 export async function saveIrohHomeRelayUrl(value: string | null): Promise<void> {
   const relayUrl = parseIrohRelayUrl(value)
   irohRelayWriteRevision += 1

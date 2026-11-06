@@ -6,6 +6,7 @@ export type IrohPathMode = 'off' | 'fallback' | 'primary-off-lan'
 
 const IROH_ENDPOINT_ID = /^[0-9a-f]{64}$/
 
+/** Enables iroh routing only for a canonical lowercase, 32-byte hexadecimal endpoint ID. */
 export function hostHasIrohEndpoint(host: { iroh?: { endpointId?: string } | null }): boolean {
   return typeof host.iroh?.endpointId === 'string' && IROH_ENDPOINT_ID.test(host.iroh.endpointId)
 }
@@ -21,6 +22,7 @@ export function inferIrohPathMode(host: {
   return host.relay ? 'fallback' : 'primary-off-lan'
 }
 
+/** Restricts native iroh attempts to the platforms that ship its bridge implementation. */
 export function isIrohNativePlatform(): boolean {
   return Platform.OS === 'ios' || Platform.OS === 'android'
 }

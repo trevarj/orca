@@ -28,6 +28,10 @@ type EndpointOwner = EndpointLifecycle & {
   start(): Promise<void>
 }
 
+/**
+ * Owns relay supervision or direct-to-relay upgrades until stop.
+ * Iroh-only hosts need neither: their RPC client owns native reconnects.
+ */
 export function startMobileEndpointLifecycle(
   logical: StableLogicalRpcClient,
   initialHost: HostProfile,

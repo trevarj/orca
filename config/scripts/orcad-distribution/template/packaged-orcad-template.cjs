@@ -114,6 +114,10 @@ function resealOrcadTemplateManifest(templateDir, signedPaths) {
 }
 
 // Notarization requires Developer ID on nested Mach-O: afterPack signs, reseals and verifies exact shipped bytes.
+/**
+ * Sign and reseal macOS binaries, then compact/reference tools for the selected targets.
+ * Missing templates are allowed only when this build does not require one.
+ */
 async function finalizePackagedOrcadTemplate(resourcesDir, options) {
   const { platform, env = process.env, signMacBinary, targets } = options
   const templateDir = join(resourcesDir, ORCAD_TEMPLATE_RESOURCE_DIR)

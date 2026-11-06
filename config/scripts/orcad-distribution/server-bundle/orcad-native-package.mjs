@@ -26,7 +26,7 @@ function verifyArchive(bytes, integrity) {
   }
 }
 
-// Fetch only these small release assets; ordinary installs remain host-only.
+/** Fetch a size-bounded, lockfile-verified native archive and extract only the requested binary. */
 export async function materializeNativePackage({ root, name, version, filename }) {
   const lockfile = parseLockfile(await readFile(join(root, 'pnpm-lock.yaml'), 'utf8'))
   const integrity = lockfile.packages?.[`${name}@${version}`]?.resolution?.integrity
