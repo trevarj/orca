@@ -81,6 +81,7 @@ function e2eHeadlessServeWithoutBrowser(): boolean {
   )
 }
 
+/** Install desktop RPC and its live relay preference subscription, detached when RPC stops. */
 function installRuntimeRpc(
   runtime: RuntimeService,
   serveOptions: ReturnType<typeof getServeOptions> | null

@@ -27,6 +27,7 @@ import { useMobilePairingConnectionMode } from '../../mobile/use-mobile-pairing-
 import { useMobilePairingAddressPreference } from '../../mobile/use-mobile-pairing-address-preference'
 import { shouldOpenMobilePairingAddress } from './mobile-pane-search'
 
+/** Manages mobile settings and paired devices, keeping pairing offers aligned with connection preferences. */
 export function MobilePane(): React.JSX.Element {
   const autoRestoreFitMs = useAppStore((s) => s.settings?.mobileAutoRestoreFitMs ?? null)
   const updateSettings = useAppStore((s) => s.updateSettings)
@@ -70,6 +71,7 @@ export function MobilePane(): React.JSX.Element {
   }, [pairingUrl])
 
   // Policy/endpoint changes invalidate displayed and pending offers; rotate the next credential instead of reusing the discarded one.
+  /** Clears loading and supersedes pending requests; `armRotate: false` suppresses scheduling rotation. */
   const invalidatePairing = useCallback((opts: { armRotate?: boolean } = {}): void => {
     pairingRequestIdRef.current += 1
     const hadPending = offerDisplayedRef.current || loadingRef.current
@@ -88,6 +90,7 @@ export function MobilePane(): React.JSX.Element {
       setRotateNextQr(true)
     }
   }, [])
+  /** Invalidates address-based offers only; LAN preference changes do not affect Iroh offers. */
   const invalidatePairingAddress = useCallback(() => {
     if (connectionMode !== 'iroh') {
       invalidatePairing()
@@ -157,6 +160,10 @@ export function MobilePane(): React.JSX.Element {
     [mountedRef, selectAddressAfterRefresh]
   )
 
+  /**
+   * Mints an offer for the selected or overridden mode, ignoring superseded responses.
+   * Explicit `rotate` overrides queued rotation; Iroh offers omit the selected LAN address.
+   */
   const generateQR = useCallback(
     async (
       opts: {
@@ -282,6 +289,7 @@ export function MobilePane(): React.JSX.Element {
     ]
   )
 
+  /** Copies the current Relay failure, mode, and timestamp, omitting the selected pairing address. */
   const copyRelayDiagnostics = useCallback(async (): Promise<void> => {
     if (relayMintFailure == null) {
       return

@@ -25,6 +25,7 @@ final class IrohClient {
 
   init() {}
 
+  /// Bind the local endpoint, retiring the previous one if its home relay changes.
   func start(homeRelayUrl: String?) async throws -> String {
     try Task.checkCancellation()
     let selected = try Self.parseHomeRelayUrl(homeRelayUrl)
@@ -54,6 +55,7 @@ final class IrohClient {
     }
   }
 
+  /// Dial a peer with address hints and publish one bi-stream plus its lifecycle tasks.
   func connect(endpointId: String, relayUrl: String?, directAddresses: [String]) async throws -> String {
     try Task.checkCancellation()
     let connectGeneration = locked { generation }
@@ -110,6 +112,7 @@ final class IrohClient {
     }
   }
 
+  /// Validate a base64 payload of at most 1 MiB and serialize its length-prefixed write.
   func send(connectionId: String, bytesBase64: String) async throws {
     guard let live = locked({ destroyed ? nil : connections[connectionId] }) else {
       throw IrohClientError.unknownConnection
@@ -150,6 +153,7 @@ final class IrohClient {
     return IrohPathUtils.snapshot(live.connection.paths())
   }
 
+  /// Remove and close a connection once; unknown connection IDs are ignored.
   func close(connectionId: String) async {
     let live = locked { connections.removeValue(forKey: connectionId) }
     guard let live else { return }
@@ -162,6 +166,7 @@ final class IrohClient {
     await stopLock.release()
   }
 
+  /// Permanently reject new work and schedule endpoint and connection cleanup once.
   func destroy() {
     let shouldStop = locked { () -> Bool in
       guard !destroyed else { return false }
@@ -173,6 +178,7 @@ final class IrohClient {
     }
   }
 
+  /// Retire state while holding stopLock, consume any bind result, and close the retired resources.
   private func stopLocked() async {
     let (lives, ep, task) = locked { () -> ([LiveConnection], Endpoint?, Task<Endpoint, Error>?) in
       generation += 1
@@ -200,6 +206,7 @@ final class IrohClient {
     return try body()
   }
 
+  /// Normalize an HTTPS relay origin; blank selects the preset, while non-root URLs are rejected.
   static func parseHomeRelayUrl(_ value: String?) throws -> String? {
     guard let selected = value?.trimmingCharacters(in: .whitespacesAndNewlines),
       !selected.isEmpty else { return nil }
@@ -224,8 +231,8 @@ final class IrohClient {
     return canonical
   }
 
+  /// Share one bind for this generation; only its task publishes or closes the owned endpoint.
   private func ensureEndpoint(expectedGeneration: Int) async throws -> (Endpoint, Int) {
-    // Concurrent dials share one local bind; only its task publishes or closes the owned result.
     let (task, gen) = try locked { () -> (Task<Endpoint, Error>, Int) in
       guard !destroyed, generation == expectedGeneration else { throw IrohClientError.notStarted }
       if let existing = startTask { return (existing, expectedGeneration) }
@@ -273,6 +280,7 @@ final class IrohClient {
     }
   }
 
+  /// Buffer stream chunks into frames, dropping the connection on EOF or a non-cancellation failure.
   private func startReadLoop(_ live: LiveConnection) {
     live.readTask = Task { [weak self] in
       guard let self else { return }
@@ -294,6 +302,7 @@ final class IrohClient {
     }
   }
 
+  /// Emit complete bounded frames as base64, retaining an incomplete frame for the next read.
   private func drainFrames(from buffer: inout Data, connectionId: String) throws {
     while buffer.count >= 4 {
       try Task.checkCancellation()
@@ -313,6 +322,7 @@ final class IrohClient {
     }
   }
 
+  /// Poll live paths every two seconds and emit only changes to the type or route details.
   private func startPathPoll(_ live: LiveConnection) {
     live.pathTask = Task { [weak self] in
       while !Task.isCancelled {
@@ -337,13 +347,14 @@ final class IrohClient {
     }
   }
 
+  /// Remove a connection once and preserve the peer's close reason when receive failure wins the race.
   private func drop(connectionId: String, reason: String) async {
-    // The recv failure can beat closed(); keep the peer's application code (4001).
     let live = locked { connections.removeValue(forKey: connectionId) }
     guard let live else { return }
     await teardown(live, reason: live.connection.closeReason() ?? reason, emit: true)
   }
 
+  /// Cancel lifecycle tasks, close the stream's connection, and optionally notify while not destroyed.
   private func teardown(_ live: LiveConnection, reason: String, emit: Bool) async {
     live.readTask?.cancel()
     live.pathTask?.cancel()
@@ -403,6 +414,7 @@ actor AsyncLock {
   private var busy = false
   private var waiters: [CheckedContinuation<Void, Never>] = []
 
+  /// Wait for FIFO ownership across suspension; every acquisition must eventually be released.
   func acquire() async {
     if busy {
       await withCheckedContinuation { waiters.append($0) }
@@ -411,6 +423,7 @@ actor AsyncLock {
     }
   }
 
+  /// Transfer ownership to the oldest waiter, or mark the lock idle when none remain.
   func release() {
     if waiters.isEmpty {
       busy = false

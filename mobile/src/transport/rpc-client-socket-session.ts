@@ -48,6 +48,10 @@ export class RpcClientSocketSession {
   private connectTimer: ReturnType<typeof setTimeout> | null = null
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null
 
+  /**
+   * Creates the injected transport or a ws/wss socket, then installs handlers and a connect deadline.
+   * Unsupported default URL schemes throw before opening a socket.
+   */
   constructor(private readonly options: SocketSessionOptions) {
     // Why: default WS for LAN/relay; iroh injects MobileIrohFramedSocket (same probe path).
     if (options.createSocket) {
@@ -63,6 +67,10 @@ export class RpcClientSocketSession {
     this.armConnectTimeout()
   }
 
+  /**
+   * Returns whether framing accepted the request; serialization or send errors return false.
+   * Forces replacement of the current session on send exceptions or connected-state transport desync.
+   */
   sendEncrypted(request: RpcRequest): boolean {
     if (this.socket.readyState === WebSocket.OPEN && this.framing) {
       try {
@@ -115,6 +123,10 @@ export class RpcClientSocketSession {
     this.framing = null
   }
 
+  /**
+   * Guards open, message, and error events against replaced sockets.
+   * Close events still reach the controller so a late auth rejection is not lost.
+   */
   private attachHandlers(): void {
     this.socket.onopen = () => {
       if (this.isStale('open')) {
