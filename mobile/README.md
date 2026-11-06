@@ -85,10 +85,14 @@ If the phone has a stale host entry, remove it from the app and pair again.
 Iroh requires a native development client; Expo Go does not include `@orca/expo-iroh`.
 Pairing keeps the desktop's Iroh endpoint and dial hints alongside its direct endpoint.
 Iroh uses the same encrypted mobile RPC and pairing credentials as direct connections.
+Native write failures reject pending RPCs and reconnect through fresh authentication,
+even when a connection-log consumer throws.
 
 Desktop Iroh pairing waits up to 15 seconds for relay readiness before reporting it unavailable.
-Readiness continues in the background, and failed starts retry the selected relay with capped
-backoff rather than switching to Automatic. Retry pairing once the relay is online.
+Readiness continues in the background, and transient network or socket failures retry the selected
+relay with capped backoff rather than switching to Automatic. Retry pairing once the relay is online.
+A missing or incompatible desktop Iroh SDK stays unavailable without background retries; install a
+compatible native module and restart the runtime.
 An Iroh-only pairing does not expose the desktop WebSocket listener after restart; explicit
 network-serving settings and previously paired network WebSocket clients still can.
 
