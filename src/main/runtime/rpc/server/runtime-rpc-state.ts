@@ -1,3 +1,5 @@
+import type { IrohTransport, IrohTransportOptions } from '../iroh-transport'
+import { parseIrohRelayUrl } from '../../../../shared/iroh-relay-preference'
 import { randomBytes } from 'node:crypto'
 import type { RuntimeTransportMetadata } from '../../../../shared/runtime-bootstrap'
 import type { OrcaRuntimeService } from '../../orca-runtime'
@@ -50,6 +52,16 @@ export class RuntimeRpcState {
   protected readonly exposeNetworkByDefault: boolean
   protected readonly pinnedBindHost: string | null
   protected readonly webClientRoot: string | undefined
+  protected readonly irohBindEndpoint: IrohTransportOptions['bindEndpoint']
+  protected irohTransport: IrohTransport | null = null
+  protected pendingIrohTransport: IrohTransport | null = null
+  protected detachIrohWiring: (() => void) | null = null
+  protected desiredIrohRelayUrl: string | null
+  protected irohRelayGeneration = 0
+  protected appliedIrohRelayGeneration = -1
+  protected irohRebindPromise: Promise<void> | null = null
+  protected irohRuntimeStarted = false
+  protected onStop: (() => void) | null
   // Track actual WS bind host for pairing exposure transitions (STA-2370).
   protected wsBoundHost: string | null = null
   // Share one pending rebind across concurrent pairing offers (STA-2370).
@@ -120,6 +132,9 @@ export class RuntimeRpcState {
     exposeNetworkByDefault = false,
     pinnedBindHost,
     webClientRoot,
+    irohBindEndpoint,
+    irohRelayUrl,
+    onStop,
     keepaliveIntervalMs = KEEPALIVE_INTERVAL_MS,
     longPollCap = LONG_POLL_CAP,
     metadataOwnershipPollMs = RUNTIME_METADATA_OWNERSHIP_POLL_MS,
@@ -136,6 +151,9 @@ export class RuntimeRpcState {
     this.requirePinnedWsPort = requirePinnedWsPort
     this.exposeNetworkByDefault = exposeNetworkByDefault
     this.pinnedBindHost = pinnedBindHost ?? null
+    this.irohBindEndpoint = irohBindEndpoint
+    this.desiredIrohRelayUrl = parseIrohRelayUrl(irohRelayUrl)
+    this.onStop = onStop ?? null
     this.webClientRoot = webClientRoot
     this.keepaliveIntervalMs = keepaliveIntervalMs
     this.longPollCap = longPollCap

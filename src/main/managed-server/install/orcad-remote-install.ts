@@ -62,9 +62,14 @@ export async function installOrcadBundle(
       : {})
   })
   if (
-    await isRemoteInstallComplete(options.conn, ORCAD_INSTALL_MODEL, remoteDir, options.host, {
-      signal: options.signal
-    })
+    await isRemoteInstallComplete(
+      options.conn,
+      ORCAD_INSTALL_MODEL,
+      remoteDir,
+      options.host,
+      options.target,
+      { signal: options.signal }
+    )
   ) {
     return 'reused'
   }
@@ -91,9 +96,14 @@ export async function installOrcadBundle(
   try {
     // A sibling may have completed deployment while this client waited for the lock.
     if (
-      await isRemoteInstallComplete(options.conn, ORCAD_INSTALL_MODEL, remoteDir, options.host, {
-        signal: options.signal
-      })
+      await isRemoteInstallComplete(
+        options.conn,
+        ORCAD_INSTALL_MODEL,
+        remoteDir,
+        options.host,
+        options.target,
+        { signal: options.signal }
+      )
     ) {
       return 'reused'
     }

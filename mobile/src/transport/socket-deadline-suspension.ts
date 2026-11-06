@@ -1,3 +1,4 @@
+import { translate } from '../i18n/mobile-i18n'
 import type { ConnectionDiagnosticCode, ConnectionLogEmitter, ConnectionLogLevel } from './types'
 
 // Allow ordinary scheduling delays before treating a deadline as suspended.
@@ -39,8 +40,21 @@ export function describeSocketDeadline(input: SocketDeadlineInput): SocketDeadli
       suspended: true,
       level: 'warn',
       code: 'suspended-dial',
-      title: input.kind === 'connect' ? 'WebSocket connect interrupted' : 'Handshake interrupted',
-      detail: `Connection deadline delayed for ${formatSuspendedElapsed(elapsedMs)}; app may have been suspended. Connection state unknown, re-dialing`,
+      title:
+        input.kind === 'connect'
+          ? translate(
+              'connection.socketDeadlineSuspension.connectInterrupted',
+              'Transport connect interrupted'
+            )
+          : translate(
+              'connection.socketDeadlineSuspension.handshakeInterrupted',
+              'Handshake interrupted'
+            ),
+      detail: translate(
+        'connection.socketDeadlineSuspension.suspendedDetail',
+        'Connection deadline delayed for {{elapsed}}; app may have been suspended. Connection state unknown, re-dialing',
+        { elapsed: formatSuspendedElapsed(elapsedMs) }
+      ),
       consoleMessage: `[net] ${input.kind} deadline delivery delayed`,
       consoleFields
     }
@@ -50,8 +64,15 @@ export function describeSocketDeadline(input: SocketDeadlineInput): SocketDeadli
       suspended: false,
       level: 'error',
       code: 'connect-timeout',
-      title: 'WebSocket connect timeout',
-      detail: `No TCP/WS handshake within ${input.timeoutMs / 1000}s — endpoint unreachable?`,
+      title: translate(
+        'connection.socketDeadlineSuspension.connectTimeout',
+        'Transport connect timeout'
+      ),
+      detail: translate(
+        'connection.socketDeadlineSuspension.connectTimeoutDetail',
+        'Transport did not open within {{seconds}}s',
+        { seconds: input.timeoutMs / 1000 }
+      ),
       consoleMessage: '[net] connect-timeout fired (onopen never arrived)',
       consoleFields
     }
@@ -60,8 +81,12 @@ export function describeSocketDeadline(input: SocketDeadlineInput): SocketDeadli
     suspended: false,
     level: 'error',
     code: 'handshake-timeout',
-    title: 'Handshake timeout',
-    detail: `No e2ee_ready/e2ee_authenticated within ${input.timeoutMs / 1000}s`,
+    title: translate('connection.socketDeadlineSuspension.handshakeTimeout', 'Handshake timeout'),
+    detail: translate(
+      'connection.socketDeadlineSuspension.handshakeTimeoutDetail',
+      'No e2ee_ready/e2ee_authenticated within {{seconds}}s',
+      { seconds: input.timeoutMs / 1000 }
+    ),
     consoleMessage: '[net] handshake-timeout fired (e2ee_authenticated never arrived)',
     consoleFields
   }
