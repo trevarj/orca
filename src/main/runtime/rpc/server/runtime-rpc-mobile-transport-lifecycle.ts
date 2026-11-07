@@ -5,6 +5,7 @@ import { placeUnshownLiveTerminalsBestEffort } from '../../terminal/adoption/uns
 import type { DeviceRegistry } from './pairing/device-registry'
 import type { E2EEKeypair } from '../../e2ee-keypair'
 import { IrohModuleLoadError } from '../iroh-endpoint-bind'
+import { IrohEndpointSecretError } from '../iroh-endpoint-secret'
 import { IrohTransport } from '../iroh-transport'
 import { MobileSocketWiring } from '../mobile-socket-wiring'
 import { UnpairedDeviceAuthThrottle } from '../unpaired-device-auth-throttle'
@@ -112,7 +113,7 @@ export class RuntimeRpcMobileTransportLifecycle extends RuntimeRpcWebSocketDispa
         this.irohRelayRetry.reset()
       } catch (error) {
         console.error(
-          error instanceof IrohModuleLoadError
+          error instanceof IrohModuleLoadError || error instanceof IrohEndpointSecretError
             ? `[runtime] ${error.message}`
             : '[runtime] Failed to bind the selected Iroh relay'
         )
