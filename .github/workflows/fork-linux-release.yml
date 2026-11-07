@@ -94,17 +94,21 @@ jobs:
 
       - uses: ./.github/actions/install-mobile-dependencies
 
+      - name: Provision verified Linux native inputs at the supported glibc floor
+        run: |
+          node --input-type=module -e '
+            import { ensureIrohPrebuild } from "./config/scripts/orcad-distribution/prebuilds/ensure-iroh-prebuild.mjs"
+            await ensureIrohPrebuild({ targetPlatform: "linux", arch: "x64" })
+          '
+          node config/scripts/orcad-distribution/prebuilds/stage-source-iroh.mjs
+
+      - name: Verify the native incoming handshake deadline
+        run: node config/scripts/orcad-distribution/prebuilds/iroh-handshake-deadline-smoke.mjs
+
       - name: Build the fork desktop, CLI, and web payloads
         run: pnpm run build:release
         env:
           NODE_OPTIONS: --max-old-space-size=4096
-
-      - name: Provision verified Linux native inputs at the supported glibc floor
-        run: |
-          node --input-type=module -e '
-            import { ensureLinuxIrohPrebuild } from "./config/scripts/orcad-distribution/prebuilds/ensure-linux-iroh-prebuild.mjs"
-            await ensureLinuxIrohPrebuild({ arch: "x64" })
-          '
 
       - name: Build the fork Linux x64 glibc SSH deployment template
         run: node config/scripts/orcad-distribution/template/build-orcad-template.mjs --targets linux-x64-glibc
