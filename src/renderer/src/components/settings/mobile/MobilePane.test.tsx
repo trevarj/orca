@@ -189,6 +189,7 @@ describe('MobilePane pairing connection mode', () => {
   let pairingBackend: OrcaRuntimeRpcServer | undefined
   let pairingUserDataPath: string | undefined
 
+  /** Route renderer pairing requests through real IPC handlers and expose the registry for token checks. */
   async function startPairingBackend() {
     pairingUserDataPath = mkdtempSync(join(tmpdir(), 'orca-mobile-pane-'))
     pairingBackend = new OrcaRuntimeRpcServer({
