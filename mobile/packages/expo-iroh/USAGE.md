@@ -119,6 +119,11 @@ After authentication, the desktop idle lease tracks nonempty native reads
 writes do not renew it. Unauthenticated traffic never extends the fixed
 pre-authentication deadline.
 
+Endpoint identity read failures leave the existing secret untouched; diagnostics
+distinguish read, write, and SDK-load failures without including secret contents.
+Desktop pairing codes expire after ten minutes. Visible QR codes renew without
+revoking a code being scanned; changing the advertised address requires rotation.
+
 | Symptom                                                     | Check                                                                                                                                                                                                                                                          |
 | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Pairing dials `ws://…` instead of iroh                      | The QR was not an Iroh-mode offer — re-generate with the Iroh option selected (and desktop must not run with `ORCA_DISABLE_IROH=1`)                                                                                                                            |

@@ -21,6 +21,7 @@ import { registerMobileHandlers } from '../../../../../main/ipc/mobile'
 import { OrcaRuntimeService } from '../../../../../main/runtime/orca-runtime'
 import { OrcaRuntimeRpcServer } from '../../../../../main/runtime/rpc/server/runtime-rpc'
 import type { MobilePairingQrResult } from '../../../../../main/runtime/rpc/server/pairing/mobile-pairing-qr'
+import { MOBILE_PAIRING_OFFER_TTL_MS } from '../../../../../main/runtime/rpc/server/pairing/pairing-offer-expiry'
 
 type PairedDevicesProps = {
   devices: readonly PairedDevice[]
@@ -296,7 +297,7 @@ describe('MobilePane pairing connection mode', () => {
     })
     await user.click(screen.getByRole('button', { name: 'Generate' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Generate' })).toBeEnabled())
-    const lost = registry.getPendingDevice('mobile')!
+    const lost = registry.getPendingDevice('mobile', MOBILE_PAIRING_OFFER_TTL_MS)!
     expect(lost.token).not.toBe(first.deviceToken)
     expect(registry.validateToken(first.deviceToken)).toBeNull()
     expect(screen.getByTestId('pairing-url')).toHaveTextContent(/^none$/)
@@ -349,7 +350,7 @@ describe('MobilePane pairing connection mode', () => {
     })
     await user.click(screen.getByRole('button', { name: 'Generate' }))
     await minted.promise
-    const stale = registry.getPendingDevice('mobile')!
+    const stale = registry.getPendingDevice('mobile', MOBILE_PAIRING_OFFER_TTL_MS)!
     expect(stale.token).not.toBe(first.deviceToken)
 
     await user.click(screen.getByRole('button', { name: 'choose-discovered-address' }))
