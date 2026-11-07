@@ -346,7 +346,21 @@ describe('runtime Iroh home relay replacement', () => {
     }
   })
 
-  it('keeps a permanent SDK load failure unavailable across pairing requests and elapsed backoff', async () => {
+  it.each([
+    ['MODULE_NOT_FOUND', 'import', 'MODULE_NOT_FOUND'],
+    ['ERR_MODULE_NOT_FOUND', 'import', 'ERR_MODULE_NOT_FOUND'],
+    ['ERR_DLOPEN_FAILED', 'import', 'ERR_DLOPEN_FAILED'],
+    ['PRIVATE_KEY_EXCERPT', 'import', 'unknown'],
+    [undefined, 'import', 'unknown'],
+    [undefined, 'api', 'unsupported-api']
+  ] as const)('does not retry permanent SDK failures (%s, %s)', async (code, stage, reason) => {
+    const privateData = 'private-key-excerpt'
+    const failure = new IrohModuleLoadError(
+      Object.assign(new Error(`SDK failed: ${privateData}`), { code }),
+      stage
+    )
+    expect(failure.reason).toBe(reason)
+    expect(failure).not.toHaveProperty('cause')
     let sdkAvailable = false
     const server = new OrcaRuntimeRpcServer({
       runtime: new OrcaRuntimeService(),
@@ -356,7 +370,7 @@ describe('runtime Iroh home relay replacement', () => {
       wsPort: 0,
       irohBindEndpoint: async () => {
         if (!sdkAvailable) {
-          throw new IrohModuleLoadError(new Error('Native SDK unavailable'))
+          throw failure
         }
         return controlledEndpoint('https://unexpected-retry.relay.test/')
       }
@@ -383,6 +397,9 @@ describe('runtime Iroh home relay replacement', () => {
       await vi.advanceTimersByTimeAsync(300_000)
       expect(server.getIrohStatus()).toEqual({ bound: false, endpointId: null, relayUrl: null })
       expect(errors).toHaveBeenCalledOnce()
+      expect(JSON.stringify(errors.mock.calls)).toContain(reason)
+      expect(JSON.stringify(errors.mock.calls)).not.toContain(privateData)
+      expect(JSON.stringify(errors.mock.calls)).not.toContain('PRIVATE_KEY_EXCERPT')
     } finally {
       vi.useRealTimers()
       await server.stop()
