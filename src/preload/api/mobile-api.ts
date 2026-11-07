@@ -26,7 +26,7 @@ export type MobileApi = {
         qrSize: number | null
         qrError?: 'encoding_failed'
         pairingUrl: string
-        /** Null for key-only Iroh offers or Relay offers without a direct address. */
+        /** Iroh key-dial URL, direct WebSocket address, or null for address-free Relay offers. */
         endpoint: string | null
         deviceId: string
         connectionMode: MobilePairingConnectionMode
