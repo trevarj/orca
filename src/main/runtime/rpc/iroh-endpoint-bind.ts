@@ -1,11 +1,32 @@
 import type { Endpoint, RelayMode } from '@number0/iroh'
 
+type IrohModuleLoadReason =
+  | 'MODULE_NOT_FOUND'
+  | 'ERR_MODULE_NOT_FOUND'
+  | 'ERR_DLOPEN_FAILED'
+  | 'unsupported-api'
+  | 'unknown'
+
+/** Keep permanent SDK failures actionable without retaining potentially sensitive causes. */
 export class IrohModuleLoadError extends Error {
-  constructor(cause: unknown) {
-    super('Iroh SDK could not be loaded; install a compatible native module and restart', {
-      cause
-    })
+  readonly reason: IrohModuleLoadReason
+
+  /** Expose only known import codes or the explicit API compatibility stage. */
+  constructor(cause: unknown, stage: 'import' | 'api' = 'import') {
+    const code = cause instanceof Error && 'code' in cause ? cause.code : undefined
+    const reason =
+      stage === 'api'
+        ? 'unsupported-api'
+        : code === 'MODULE_NOT_FOUND' ||
+            code === 'ERR_MODULE_NOT_FOUND' ||
+            code === 'ERR_DLOPEN_FAILED'
+          ? code
+          : 'unknown'
+    super(
+      `Iroh SDK could not be loaded (${reason}); install a compatible native module and restart`
+    )
     this.name = 'IrohModuleLoadError'
+    this.reason = reason
   }
 }
 
@@ -20,14 +41,14 @@ export async function bindIrohEndpoint(
   let sdk: { Endpoint: typeof Endpoint; RelayMode: typeof RelayMode }
   try {
     sdk = await import('@number0/iroh')
-    if (
-      typeof sdk.Endpoint?.bind !== 'function' ||
-      typeof sdk.RelayMode?.customFromUrls !== 'function'
-    ) {
-      throw new TypeError('Iroh SDK does not expose the required endpoint and relay APIs')
-    }
   } catch (cause) {
     throw new IrohModuleLoadError(cause)
+  }
+  if (
+    typeof sdk.Endpoint?.bind !== 'function' ||
+    typeof sdk.RelayMode?.customFromUrls !== 'function'
+  ) {
+    throw new IrohModuleLoadError(undefined, 'api')
   }
   if (signal.aborted) {
     return null

@@ -195,7 +195,7 @@ describe('IrohTransport', () => {
 
     await expect(transport.start()).rejects.toMatchObject({
       name: 'IrohModuleLoadError',
-      cause: new TypeError('Iroh SDK does not expose the required endpoint and relay APIs')
+      reason: 'unsupported-api'
     })
     expect(transport.endpointId).toBeNull()
     expect(transport.endpointDialHints()).toBeNull()

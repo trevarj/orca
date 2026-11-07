@@ -49,7 +49,7 @@ export function MobilePane(): React.JSX.Element {
   const settingsSearchQuery = useAppStore((state) => state.settingsSearchQuery)
   const [connectionMode, setConnectionMode] = useMobilePairingConnectionMode()
   const irohRelayUrl = useAppStore((state) => state.settings?.mobileIrohRelayUrl ?? null)
-  const [rotateNextQr, setRotateNextQr] = useState(false)
+  const rotateNextQrRef = useRef(false)
   const codeCopiedResetTimerRef = useRef<number | null>(null)
   const wasSignedInRef = useRef(signedIn)
   // Invalidate late pairing responses after sign-out, mode or address changes.
@@ -89,7 +89,7 @@ export function MobilePane(): React.JSX.Element {
     setLoading(false)
     // Main rotates on mode mismatch; extra renderer rotation would race other windows off the fresh token.
     if (hadPending && opts.armRotate !== false) {
-      setRotateNextQr(true)
+      rotateNextQrRef.current = true
     }
   }, [])
   /** Invalidates address-based offers only; LAN preference changes do not affect Iroh offers. */
@@ -164,7 +164,7 @@ export function MobilePane(): React.JSX.Element {
 
   /**
    * Mints an offer for the selected or overridden mode, ignoring superseded responses.
-   * Explicit `rotate` overrides queued rotation; Iroh offers omit the selected LAN address.
+   * Queued rotation is mandatory until a current request succeeds; Iroh offers omit the selected LAN address.
    */
   const generateQR = useCallback(
     async (
@@ -186,7 +186,7 @@ export function MobilePane(): React.JSX.Element {
         const result = await window.api.mobile.getPairingQR({
           ...(preferredMode !== 'iroh' && selectedAddress ? { address: selectedAddress } : {}),
           connectionMode: preferredMode,
-          ...((opts.rotate ?? rotateNextQr) ? { rotate: true } : {})
+          ...(opts.rotate || rotateNextQrRef.current ? { rotate: true } : {})
         })
         // Ignore superseded responses whose policy/address selection is no longer current.
         if (requestId !== pairingRequestIdRef.current) {
@@ -209,7 +209,7 @@ export function MobilePane(): React.JSX.Element {
             setDeviceCountAtQr(getPairedMobileDevicesSnapshot().length)
             clearCodeCopiedResetTimer()
             setCodeCopied(false)
-            setRotateNextQr(false)
+            rotateNextQrRef.current = false
             void loadDevices()
           }
         } else if (mountedRef.current) {
@@ -251,15 +251,7 @@ export function MobilePane(): React.JSX.Element {
         }
       }
     },
-    [
-      clearCodeCopiedResetTimer,
-      connectionMode,
-      loadDevices,
-      mountedRef,
-      rotateNextQr,
-      selectedAddress,
-      signedIn
-    ]
+    [clearCodeCopiedResetTimer, connectionMode, loadDevices, mountedRef, selectedAddress, signedIn]
   )
 
   const changeConnectionMode = useCallback(
