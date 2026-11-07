@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Build patched node-pty for current platform/arch/libc so deployment needs no compiler; compat slots also build COMPAT_SLOT_ADDONS.
-// Normal GNU slots also build pinned iroh source at the same floor; the manifest hashes both payloads.
+// Supported SDK slots also build pinned iroh with its native handshake deadline; the manifest hashes both payloads.
 // Require repo patch: GLIBC symbol pins plus no-as-needed retain libutil/libpthread and prevent #9902.
 // Use pinned, hash-verified Node headers at N-API 8; glibc slots target 2.28, optional compat 2.17, musl stays separate.
 // CI merges per-slot outputs; --slot overrides detection. Options: --require-slots [a,b], --smoke, --print-slot, --print-runtime.

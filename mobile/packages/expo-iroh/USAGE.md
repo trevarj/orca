@@ -119,6 +119,13 @@ After authentication, the desktop idle lease tracks nonempty native reads
 writes do not renew it. Unauthenticated traffic never extends the fixed
 pre-authentication deadline.
 
+Qualified desktop SDK natives enforce a ten-second incoming handshake deadline.
+They close the timed-out native connection before releasing its admission slot;
+other connections are not reset and late handshakes cannot be published.
+Stock npm natives are rejected before binding. For source development, run
+`node config/scripts/orcad-distribution/prebuilds/stage-source-iroh.mjs` on the
+matching host before entering the pinned FHS environment.
+
 Only authenticated direct WebSocket clients contribute TCP source-address history.
 Iroh paths and home-relay addresses do not. At startup, `orca serve` can use
 remembered direct public sources to allow public WebSocket clients unless
@@ -128,6 +135,11 @@ Endpoint identity read failures leave the existing secret untouched; diagnostics
 distinguish read, write, and SDK-load failures without including secret contents.
 Desktop pairing codes expire after ten minutes. Visible QR codes renew without
 revoking a code being scanned; changing the advertised address requires rotation.
+
+Pairing hints require HTTPS relay origins and IP socket addresses. Invalid saved
+hints fail before native startup/dial without deleting the desktop; rescan a
+refreshed QR to replace them. The Desktops row refreshes Iroh hints as attempts
+progress.
 
 | Symptom                                                     | Check                                                                                                                                                                                                                                                          |
 | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

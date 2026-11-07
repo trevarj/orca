@@ -67,12 +67,14 @@ async function acceptConnection(incoming: Incoming, args: IrohAcceptLoopOptions)
   let connection: Connection | null = null
   let handedOff = false
   try {
-    // Accepting has no close operation; finish a late handshake to own and close its result.
+    // The qualified SDK closes connect() natively after 10s. A JS timeout cannot
+    // cancel it, so retain this admission until native completion; close late shutdown results.
     connection = await (await incoming.accept()).connect()
-    args.connections.add(connection)
     if (args.signal.aborted) {
+      connection.close(0n, [])
       return
     }
+    args.connections.add(connection)
     const remotePrefix = remoteIdPrefix(connection)
     const kind = connectionPathKind(connection)
     console.info(`[iroh-transport] connection accepted remote=${remotePrefix} kind=${kind}`)

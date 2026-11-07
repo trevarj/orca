@@ -1,14 +1,16 @@
 import { Platform } from 'react-native'
 import { expoIrohModuleLoads } from './expo-iroh-native-module'
+import { PAIRING_IROH_ENDPOINT_ID_PATTERN } from '../../../src/shared/remote-runtime/pairing/mobile-pairing-protocol-limits'
 
 /** Presence-based path role for iroh (desktop "Iroh" pairing option). */
 export type IrohPathMode = 'off' | 'fallback' | 'primary-off-lan'
 
-const IROH_ENDPOINT_ID = /^[0-9a-f]{64}$/
-
 /** Enables iroh routing only for a canonical lowercase, 32-byte hexadecimal endpoint ID. */
 export function hostHasIrohEndpoint(host: { iroh?: { endpointId?: string } | null }): boolean {
-  return typeof host.iroh?.endpointId === 'string' && IROH_ENDPOINT_ID.test(host.iroh.endpointId)
+  return (
+    typeof host.iroh?.endpointId === 'string' &&
+    PAIRING_IROH_ENDPOINT_ID_PATTERN.test(host.iroh.endpointId)
+  )
 }
 
 /** Iroh offers carry no relay block, so iroh is the sole off-LAN path. */

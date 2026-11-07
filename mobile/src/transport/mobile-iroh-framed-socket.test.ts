@@ -105,18 +105,57 @@ describe('MobileIrohFramedSocket', () => {
   it('dials with the pairing-supplied hints and opens', async () => {
     const socket = createSocket({
       desktopEndpointId: endpointId,
-      dialHints: { relayUrl: 'https://relay.example', directAddresses: ['192.168.1.9:41234'] }
+      dialHints: {
+        relayUrl: 'https://aps1-1.relay.n0.iroh.link./',
+        directAddresses: ['192.168.1.9:41234', '[fe80::1%3]:41234', '[::ffff:192.0.2.1]:443']
+      }
     })
     const onopen = vi.fn()
     socket.onopen = onopen
 
     await vi.waitFor(() => expect(onopen).toHaveBeenCalled())
     expect(irohConnect).toHaveBeenCalledWith(endpointId, {
-      relayUrl: 'https://relay.example',
-      directAddresses: ['192.168.1.9:41234']
+      relayUrl: 'https://aps1-1.relay.n0.iroh.link./',
+      directAddresses: ['192.168.1.9:41234', '[fe80::1%3]:41234', '[::ffff:192.0.2.1]:443']
     })
     expect(socket.readyState).toBe(socket.OPEN)
   })
+
+  it.each([
+    { dialHints: { relayUrl: 'not a URL' }, field: 'relayUrl' },
+    { dialHints: { relayUrl: 'https://user:secret@relay.example/' }, field: 'relayUrl' },
+    { dialHints: { directAddresses: ['old-hostname:443'] }, field: 'directAddresses' },
+    {
+      dialHints: { directAddresses: Array<string>(9).fill('192.168.1.9:41234') },
+      field: 'directAddresses'
+    }
+  ])(
+    'reports invalid persisted $field before calling native code',
+    async ({ dialHints, field }) => {
+      const onLog = vi.fn()
+      const socket = createSocket({ desktopEndpointId: endpointId, dialHints, onLog })
+      const onclose = vi.fn()
+      const onerror = vi.fn()
+      socket.onclose = onclose
+      socket.onerror = onerror
+
+      await vi.waitFor(() => expect(onclose).toHaveBeenCalled())
+
+      expect(onclose).toHaveBeenCalledWith({
+        code: 1006,
+        reason: expect.stringContaining(`Invalid Iroh dial target: ${field}`)
+      })
+      expect(onerror).toHaveBeenCalledOnce()
+      expect(onLog).toHaveBeenCalledWith(
+        'Iroh start/connect failed',
+        expect.stringContaining(`Invalid Iroh dial target: ${field}`)
+      )
+      expect(JSON.stringify(onLog.mock.calls)).not.toContain('secret')
+      expect(irohStart).not.toHaveBeenCalled()
+      expect(irohConnect).not.toHaveBeenCalled()
+      expect(socket.readyState).toBe(socket.CLOSED)
+    }
+  )
 
   it('decodes ASCII payloads as text and high-byte payloads as bytes', async () => {
     const socket = await openSocket()

@@ -389,7 +389,7 @@ module.exports = {
   },
   // electron-builder calls this with the context alone. The second parameter is the bundle root,
   // so a test can point the guard at a scratch bundle instead of needing the repo's out/ built.
-  /** Reject missing release inputs, and provision target-native Linux dependencies before copying. */
+  /** Reject missing release inputs, and provision qualified target-native dependencies before copying. */
   beforePack: (
     context,
     mobileWebBundleDir = MOBILE_WEB_BUNDLE_DIR,
@@ -411,11 +411,15 @@ module.exports = {
     assertMobileWebBundleBuilt(mobileWebBundleDir)
     if (context.electronPlatformName === 'linux') {
       ensureWaylandClipboard(context.arch)
-      return import('./scripts/orcad-distribution/prebuilds/ensure-linux-iroh-prebuild.mjs').then(
-        ({ ensureLinuxIrohPrebuild }) =>
-          ensureLinuxIrohPrebuild({ arch: { 1: 'x64', 3: 'arm64' }[context.arch] })
-      )
     }
+    return import('./scripts/orcad-distribution/prebuilds/ensure-iroh-prebuild.mjs').then(
+      ({ ensureIrohPrebuild }) =>
+        ensureIrohPrebuild({
+          targetPlatform: context.electronPlatformName,
+          arch:
+            typeof context.arch === 'string' ? context.arch : { 1: 'x64', 3: 'arm64' }[context.arch]
+        })
+    )
   },
   /** Finalize copied target-native resources and the deployment template before app signing. */
   afterPack: async (context) => {

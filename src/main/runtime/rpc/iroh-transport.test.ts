@@ -10,6 +10,9 @@ import { IrohModuleLoadError } from './iroh-endpoint-bind'
 import { IrohTransport } from './iroh-transport'
 import { createFakeBind, FakeRecv, FakeSend } from './iroh-transport.test-fixture'
 
+const native = vi.hoisted(() => ({ load: vi.fn() }))
+vi.mock('./iroh-native-loader', () => ({ loadIrohNativeModule: native.load }))
+
 describe('IrohTransport', () => {
   const dirs: string[] = []
   const transports: IrohTransport[] = []
@@ -19,7 +22,7 @@ describe('IrohTransport', () => {
     for (const dir of dirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true })
     }
-    vi.doUnmock('@number0/iroh')
+    native.load.mockReset()
     vi.useRealTimers()
   })
 
@@ -172,7 +175,7 @@ describe('IrohTransport', () => {
   it('marks an SDK import failure as a permanent module load failure', async () => {
     const userDataPath = mkdtempSync(join(tmpdir(), 'iroh-transport-'))
     dirs.push(userDataPath)
-    vi.doMock('@number0/iroh', () => {
+    native.load.mockImplementation(() => {
       throw new Error('Native SDK unavailable')
     })
     const transport = new IrohTransport({ userDataPath })
@@ -186,10 +189,11 @@ describe('IrohTransport', () => {
   it('marks incompatible SDK exports as a permanent module load failure', async () => {
     const userDataPath = mkdtempSync(join(tmpdir(), 'iroh-transport-'))
     dirs.push(userDataPath)
-    vi.doMock('@number0/iroh', () => ({
+    native.load.mockReturnValue({
       Endpoint: { bind: null },
-      RelayMode: { customFromUrls: null }
-    }))
+      RelayMode: { customFromUrls: null },
+      Accepting: { incomingHandshakeTimeoutMs: () => 10_000 }
+    })
     const transport = new IrohTransport({ userDataPath })
     transports.push(transport)
 
@@ -201,18 +205,53 @@ describe('IrohTransport', () => {
     expect(transport.endpointDialHints()).toBeNull()
   })
 
+  it.each([
+    undefined,
+    {},
+    { incomingHandshakeTimeoutMs: () => 30_000 },
+    { incomingHandshakeTimeoutMs: () => '10000' },
+    {
+      incomingHandshakeTimeoutMs: () => {
+        throw new Error('private-native-path')
+      }
+    }
+  ])('rejects stock or unproven native SDKs before binding (%s)', async (Accepting) => {
+    const userDataPath = mkdtempSync(join(tmpdir(), 'iroh-transport-'))
+    dirs.push(userDataPath)
+    const bind = vi.fn()
+    native.load.mockReturnValue({
+      Endpoint: { bind },
+      RelayMode: { customFromUrls: vi.fn() },
+      Accepting,
+      // A JS/default wrapper must not supply the missing native capability.
+      default: { Accepting: { incomingHandshakeTimeoutMs: () => 10_000 } }
+    })
+    const transport = new IrohTransport({ userDataPath })
+    transports.push(transport)
+
+    const failure = await transport.start().catch((error: unknown) => error)
+    expect(failure).toBeInstanceOf(IrohModuleLoadError)
+    expect(failure).toMatchObject({ reason: 'unsupported-api' })
+    expect(String(failure)).toContain('pnpm build:orcad-prebuilds')
+    expect(String(failure)).not.toContain('private-native-path')
+    expect(failure).not.toHaveProperty('cause')
+    expect(bind).not.toHaveBeenCalled()
+    expect(transport.endpointId).toBeNull()
+  })
+
   it('does not classify a native socket bind failure as a permanent module load failure', async () => {
     const userDataPath = mkdtempSync(join(tmpdir(), 'iroh-transport-'))
     dirs.push(userDataPath)
     const cause = new Error('Socket temporarily unavailable')
-    vi.doMock('@number0/iroh', () => ({
+    native.load.mockReturnValue({
       Endpoint: {
         bind: async () => {
           throw cause
         }
       },
-      RelayMode: { customFromUrls: (urls: string[]) => ({ urls }) }
-    }))
+      RelayMode: { customFromUrls: (urls: string[]) => ({ urls }) },
+      Accepting: { incomingHandshakeTimeoutMs: () => 10_000 }
+    })
     const transport = new IrohTransport({ userDataPath })
     transports.push(transport)
 
@@ -232,10 +271,11 @@ describe('IrohTransport', () => {
       }
       return fake.endpoint
     })
-    vi.doMock('@number0/iroh', () => ({
+    native.load.mockReturnValue({
       RelayMode: { customFromUrls: (urls: string[]) => ({ urls }) },
-      Endpoint: { bind }
-    }))
+      Endpoint: { bind },
+      Accepting: { incomingHandshakeTimeoutMs: () => 10_000 }
+    })
     const transport = new IrohTransport({
       userDataPath,
       relayUrl: 'https://unreachable.relay.example/'
@@ -308,8 +348,9 @@ describe('IrohTransport', () => {
       const online = Promise.withResolvers<void>()
       const customRoute = relayUrl !== null
       fake.endpoint.online.mockImplementation(() => online.promise)
-      vi.doMock('@number0/iroh', () => ({
+      native.load.mockReturnValue({
         RelayMode: { customFromUrls: (urls: string[]) => ({ urls }) },
+        Accepting: { incomingHandshakeTimeoutMs: () => 10_000 },
         Endpoint: {
           bind: async (_options: unknown, mode?: { urls: string[] }) => {
             if (
@@ -320,7 +361,7 @@ describe('IrohTransport', () => {
             return fake.endpoint
           }
         }
-      }))
+      })
       const transport = new IrohTransport({ userDataPath, relayUrl })
       transports.push(transport)
       const received = vi.fn()
@@ -693,10 +734,11 @@ describe('IrohTransport', () => {
     const fake = createFakeBind(new FakeRecv(), new FakeSend())
     const binding = Promise.withResolvers<Endpoint>()
     const bind = vi.fn(() => binding.promise)
-    vi.doMock('@number0/iroh', () => ({
+    native.load.mockReturnValue({
       RelayMode: { customFromUrls: (urls: string[]) => ({ urls }) },
-      Endpoint: { bind }
-    }))
+      Endpoint: { bind },
+      Accepting: { incomingHandshakeTimeoutMs: () => 10_000 }
+    })
     const transport = new IrohTransport({ userDataPath })
     transports.push(transport)
 

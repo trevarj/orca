@@ -398,6 +398,8 @@ describe('runtime Iroh home relay replacement', () => {
       expect(server.getIrohStatus()).toEqual({ bound: false, endpointId: null, relayUrl: null })
       expect(errors).toHaveBeenCalledOnce()
       expect(JSON.stringify(errors.mock.calls)).toContain(reason)
+      expect(JSON.stringify(errors.mock.calls)).toContain('pnpm build:orcad-prebuilds')
+      expect(JSON.stringify(errors.mock.calls)).toContain('stage-source-iroh.mjs')
       expect(JSON.stringify(errors.mock.calls)).not.toContain(privateData)
       expect(JSON.stringify(errors.mock.calls)).not.toContain('PRIVATE_KEY_EXCERPT')
     } finally {

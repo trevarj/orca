@@ -3,6 +3,12 @@ import {
   MobileRelayEndpointSchema,
   type MobileRelayEndpoint
 } from '../../../src/shared/remote-runtime/relay/mobile-relay-credential-contract'
+import {
+  PAIRING_IROH_DIRECT_ADDRESS_MAX_CHARACTERS,
+  PAIRING_IROH_DIRECT_ADDRESS_MAX_COUNT,
+  PAIRING_IROH_ENDPOINT_ID_PATTERN,
+  PAIRING_RELAY_URL_MAX_CHARACTERS
+} from '../../../src/shared/remote-runtime/pairing/mobile-pairing-protocol-limits'
 import { NODE_PLATFORM_NAMES } from './mobile-runtime-host-platform'
 import { salvagedOptional } from '../../../src/shared/zod-salvage'
 import type { HostMachine } from '../../../src/shared/host-machine-line'
@@ -90,15 +96,17 @@ export type ConnectionState =
   | 'reconnecting'
   | 'auth-failed'
 
-// Why: 64-char hex EndpointId from iroh 1.1.0 (same pin as desktop pairing offers).
-const IrohEndpointIdSchema = z.string().regex(/^[0-9a-f]{64}$/)
+// Retain previously stored hints verbatim; strict format checks happen before dialing.
+const HostIrohEndpointSchema = z.object({
+  endpointId: z.string().regex(PAIRING_IROH_ENDPOINT_ID_PATTERN),
+  relayUrl: z.string().min(1).max(PAIRING_RELAY_URL_MAX_CHARACTERS).optional(),
+  directAddresses: z
+    .array(z.string().min(1).max(PAIRING_IROH_DIRECT_ADDRESS_MAX_CHARACTERS))
+    .max(PAIRING_IROH_DIRECT_ADDRESS_MAX_COUNT)
+    .optional()
+})
 
-export type HostIrohEndpoint = {
-  endpointId: string
-  // Why: pairing-time dial hints — offline-LAN connect + skip discovery RTT.
-  relayUrl?: string
-  directAddresses?: string[]
-}
+export type HostIrohEndpoint = z.infer<typeof HostIrohEndpointSchema>
 
 // Attention nudges probe healthy relays; only a network change justifies replacing the socket.
 export type ForegroundNudgeReason = 'focus' | 'app-resume' | 'network-change'
@@ -151,15 +159,7 @@ export const HostProfileSchema = z.object({
   publicKeyB64: z.string().min(1),
   lastConnected: z.number().finite(),
   relay: MobileRelayEndpointSchema.optional(),
-  iroh: z
-    .object({
-      endpointId: IrohEndpointIdSchema,
-      // Why: 2048 matches the desktop offer's PAIRING_RELAY_URL_MAX_CHARACTERS —
-      // a stricter stored cap would drop valid dial hints on restore.
-      relayUrl: z.string().min(1).max(2048).optional(),
-      directAddresses: z.array(z.string().min(1).max(64)).max(8).optional()
-    })
-    .optional()
+  iroh: HostIrohEndpointSchema.optional()
 })
 
 // Never persist deviceToken in AsyncStorage; join it from Keychain when loading the host.
@@ -170,13 +170,7 @@ export const StoredHostProfileSchema = z.object({
   endpoint: z.string().min(1),
   publicKeyB64: z.string().min(1),
   lastConnected: z.number().finite(),
-  iroh: z
-    .object({
-      endpointId: IrohEndpointIdSchema,
-      relayUrl: z.string().min(1).max(2048).optional(),
-      directAddresses: z.array(z.string().min(1).max(64)).max(8).optional()
-    })
-    .optional()
+  iroh: HostIrohEndpointSchema.optional()
 })
 
 export type StoredHostProfile = z.infer<typeof StoredHostProfileSchema>

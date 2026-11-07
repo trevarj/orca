@@ -3,6 +3,7 @@
 import { loadExpoIroh, type ExpoIrohApi } from './expo-iroh-native-module'
 import { loadIrohHomeRelayUrl } from '../storage/preferences'
 import { IROH_HOME_RELAY_URL_KEY, subscribeMirroredKey } from '../storage/mirrored-storage-keys'
+import { PairingIrohSchema } from '../../../src/shared/remote-runtime/pairing/mobile-relay-pairing-offer'
 
 const activeSockets = new Set<MobileIrohFramedSocket>()
 let unsubscribeRelayPreference: (() => void) | null = null
@@ -151,6 +152,14 @@ export class MobileIrohFramedSocket {
         if (this.closed) {
           return null
         }
+        const dialTarget = PairingIrohSchema.safeParse({
+          ...this.options.dialHints,
+          endpointId: this.options.desktopEndpointId
+        })
+        if (!dialTarget.success) {
+          const issue = dialTarget.error.issues[0]!
+          throw new Error(`Invalid Iroh dial target: ${issue.path.join('.')}: ${issue.message}`)
+        }
         const revision = relayRevision
         // The socket factory is reused on reconnect; never capture this in the logical client.
         const homeRelayUrl = await loadIrohHomeRelayUrl()
@@ -161,7 +170,9 @@ export class MobileIrohFramedSocket {
         startingRevision = revision
         try {
           const result = await iroh.irohStart(homeRelayUrl)
-          return this.closed || revision !== relayRevision ? null : result
+          return this.closed || revision !== relayRevision
+            ? null
+            : { endpointId: result.endpointId, dialTarget: dialTarget.data }
         } finally {
           startingRevision = null
         }
@@ -174,11 +185,9 @@ export class MobileIrohFramedSocket {
       if (!started) {
         return
       }
-      const { endpointId } = started
+      const { endpointId, dialTarget } = started
       const localEndpointPrefix = endpointId.slice(0, 12)
-      const relayHintHost = this.options.dialHints?.relayUrl
-        ? new URL(this.options.dialHints.relayUrl).hostname
-        : null
+      const relayHintHost = dialTarget.relayUrl ? new URL(dialTarget.relayUrl).hostname : null
       console.log('[iroh]', 'endpoint_started', { localEndpointPrefix, relayHintHost })
       this.options.onLog?.(
         'Iroh endpoint started',
@@ -187,11 +196,11 @@ export class MobileIrohFramedSocket {
       if (this.closed) {
         return
       }
-      const endpointPrefix = this.options.desktopEndpointId.slice(0, 12)
+      const endpointPrefix = dialTarget.endpointId.slice(0, 12)
       console.log('[iroh]', 'irohConnect_begin', {
         endpointPrefix,
         relayHintHost,
-        directHintCount: this.options.dialHints?.directAddresses?.length ?? 0
+        directHintCount: dialTarget.directAddresses?.length ?? 0
       })
       // Native receive/close tasks start before the bridge resolves connect.
       // Keep early close reasons so an immediate 4001 cannot become a dead OPEN socket.
@@ -206,9 +215,9 @@ export class MobileIrohFramedSocket {
           this.handleNativeClose(event.reason)
         }
       })
-      const { connectionId } = await iroh.irohConnect(this.options.desktopEndpointId, {
-        relayUrl: this.options.dialHints?.relayUrl ?? null,
-        directAddresses: this.options.dialHints?.directAddresses ?? []
+      const { connectionId } = await iroh.irohConnect(dialTarget.endpointId, {
+        relayUrl: dialTarget.relayUrl ?? null,
+        directAddresses: dialTarget.directAddresses ?? []
       })
       console.log('[iroh]', 'irohConnect_ok', { connectionId: connectionId.slice(0, 8) })
       this.options.onLog?.('Iroh dial ok', connectionId.slice(0, 8))

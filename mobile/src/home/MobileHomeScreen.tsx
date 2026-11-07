@@ -1,7 +1,6 @@
 import { useFocusEffect } from 'expo-router'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { Alert, BackHandler, View } from 'react-native'
-import { subscribeIrohHostStatus } from '../transport/mobile-iroh-host-status'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useMobileTranslation } from '../i18n/use-mobile-translation'
 import { useOpenMobileAccounts } from '../accounts/use-open-mobile-accounts'
@@ -44,7 +43,7 @@ import { MobileHomeUsageTab } from './tabs/MobileHomeUsageTab'
 // The floating button's height plus its gap above the tab bar.
 const FAB_CLEARANCE = 56 + spacing.lg
 
-/** Coordinates persistent home tabs and desktop actions, subscribing to Iroh connection status updates. */
+/** Coordinates persistent home tabs and desktop actions. */
 export function MobileHomeScreen() {
   const t = useMobileTranslation()
   useMobileColorScheme()
@@ -59,9 +58,6 @@ export function MobileHomeScreen() {
   const forgetHostClient = useForgetHostClient()
   const forceReconnectHost = useForceReconnect()
   const [actionTarget, setActionTarget] = useState<HostProfile | null>(null)
-  // Why: re-render host cards when iroh race/status updates (attempting/failed).
-  const [, setIrohStatusTick] = useState(0)
-  useEffect(() => subscribeIrohHostStatus(() => setIrohStatusTick((n) => n + 1)), [])
   const [confirmRemove, setConfirmRemove] = useState<{ id: string; name: string } | null>(null)
   const [tab, setTab] = useState<HomeTabId>('feed')
   // A tab mounts on first visit and then stays mounted, keeping its scroll and data.

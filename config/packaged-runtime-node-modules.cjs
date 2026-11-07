@@ -555,7 +555,7 @@ function assertPackagedIrohNativeVariantInstalled(
   }
 }
 
-/** Replace copied Linux GNU SDK natives with verified floor artifacts, including cross-host builds. */
+/** Replace supported copied SDK natives with verified patched artifacts, including cross-host builds. */
 async function stagePackagedIrohNative(
   resourcesDir,
   electronPlatformName,
@@ -563,18 +563,19 @@ async function stagePackagedIrohNative(
   prebuildsDir = process.env.ORCAD_PREBUILDS_DIR || join(projectDir, 'out', 'orcad-prebuilds')
 ) {
   const architecture = normalizeElectronArchitecture(electronArch)
-  if (electronPlatformName !== 'linux' || !['x64', 'arm64'].includes(architecture)) {
-    return
-  }
+  const slot = `${electronPlatformName}-${architecture}${electronPlatformName === 'linux' ? '-glibc' : ''}`
   const { IROH_PREBUILD_FILES, verifyIrohPrebuild } =
     await import('./scripts/orcad-distribution/prebuilds/iroh-prebuild.mjs')
+  if (!Object.hasOwn(IROH_PREBUILD_FILES, slot)) {
+    return
+  }
   const { readManifest } =
     await import('./scripts/orcad-distribution/prebuilds/orcad-prebuild-slot-contents.mjs')
-  const slot = `linux-${architecture}-glibc`
   const nodeModulesDir = join(resourcesDir, 'node_modules')
   const loaderPath = join(nodeModulesDir, '@number0', 'iroh', 'package.json')
   const loader = JSON.parse(readFileSync(loaderPath, 'utf8'))
-  const packageName = `@number0/iroh-linux-${architecture}-gnu`
+  const filename = IROH_PREBUILD_FILES[slot].split('/').at(-1)
+  const packageName = `@number0/${filename.replace(/^iroh\./, 'iroh-').replace(/\.node$/, '')}`
   if (loader.optionalDependencies?.[packageName] !== loader.version) {
     throw new Error(`Packaging Iroh requires the pinned ${packageName} SDK declaration.`)
   }
@@ -584,7 +585,15 @@ async function stagePackagedIrohNative(
     entry: readManifest(prebuildsDir)?.slots?.[slot],
     version: loader.version
   })
-  const filename = IROH_PREBUILD_FILES[slot].split('/').at(-1)
+  // The upstream loader tries colocated natives before the optional package; none may bypass qualification.
+  const loaderDir = dirname(loaderPath)
+  // The collected closure is hoisted; nested npm natives would shadow the qualified package.
+  rmSync(join(loaderDir, 'node_modules'), { recursive: true, force: true })
+  for (const entry of readdirSync(loaderDir)) {
+    if (entry.endsWith('.node')) {
+      rmSync(join(loaderDir, entry), { force: true })
+    }
+  }
   const nativeDir = join(nodeModulesDir, packageName)
   // Recreate only the copied package: never overwrite pnpm's linked npm native or retain stale binaries.
   rmSync(nativeDir, { recursive: true, force: true })
@@ -685,10 +694,7 @@ function prunePackagedZodSources(resourcesDir) {
 /** Reject missing target-native dependencies before extraResources can silently omit them. */
 function assertPackagedNativeVariantsInstalled(electronPlatformName, electronArch) {
   const architecture = normalizeElectronArchitecture(electronArch)
-  // GNU SDK natives come from verified floor prebuilds after copying, not host-installed npm packages.
-  if (electronPlatformName !== 'linux' || !['x64', 'arm64'].includes(architecture)) {
-    assertPackagedIrohNativeVariantInstalled(electronPlatformName, architecture)
-  }
+  // Iroh is provisioned separately before copying and checked only after patched-native staging.
   const nodeModulesDir = join(projectDir, 'node_modules')
   const isInstalled = (name) => existsSync(join(nodeModulesDir, name, 'package.json'))
   const missing = []

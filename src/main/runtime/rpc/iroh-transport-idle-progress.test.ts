@@ -11,7 +11,7 @@ import {
 import { IrohTransport } from './iroh-transport'
 import { createFakeBind, FakeRecv, FakeSend } from './iroh-transport.test-fixture'
 
-describe('Iroh authenticated communication progress', () => {
+describe('Iroh admission and authenticated communication deadlines', () => {
   const dirs: string[] = []
   const transports: IrohTransport[] = []
 
@@ -21,6 +21,67 @@ describe('Iroh authenticated communication progress', () => {
       rmSync(dir, { recursive: true, force: true })
     }
     vi.useRealTimers()
+  })
+
+  it('reuses admission capacity after native handshake deadlines without closing the endpoint', async () => {
+    vi.useFakeTimers()
+    const userDataPath = mkdtempSync(join(tmpdir(), 'iroh-transport-'))
+    dirs.push(userDataPath)
+    const stalled = Array.from({ length: 128 }, () => {
+      const fake = createFakeBind(new FakeRecv(), new FakeSend())
+      fake.accepting.connect.mockImplementation(() => {
+        const pending = Promise.withResolvers<typeof fake.connection>()
+        setTimeout(
+          () => pending.reject(new Error('incoming handshake exceeded 10 seconds')),
+          10_000
+        )
+        return pending.promise
+      })
+      return fake
+    })
+    const endpoint = stalled[0]
+    const healthy = createFakeBind(new FakeRecv(), new FakeSend())
+    const transport = new IrohTransport({
+      userDataPath,
+      preAuthTimeoutMs: 60_000,
+      idleTimeoutMs: 60_000,
+      bindEndpoint: endpoint.bindEndpoint
+    })
+    transports.push(transport)
+    const received = vi.fn()
+    transport.onMessage(received)
+    await transport.start()
+    for (const fake of stalled) {
+      endpoint.pushIncoming(fake.incoming)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(fake.accepting.connect).toHaveBeenCalledOnce()
+    }
+    endpoint.pushIncoming(healthy.incoming)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(healthy.incoming.refuse).toHaveBeenCalledOnce()
+
+    await vi.advanceTimersByTimeAsync(9_999)
+    endpoint.pushIncoming(healthy.incoming)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(healthy.incoming.refuse).toHaveBeenCalledTimes(2)
+    expect(healthy.incoming.accept).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(endpoint.endpoint.close).not.toHaveBeenCalled()
+    for (const fake of stalled) {
+      expect(fake.connection.acceptBi).not.toHaveBeenCalled()
+    }
+
+    endpoint.pushIncoming(healthy.incoming)
+    healthy.bi.recv.push(
+      Array.from(encodeLengthPrefixedFrame(new TextEncoder().encode('replacement peer')))
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    expect(received.mock.calls[0]?.[0]).toBe('replacement peer')
+    expect(healthy.incoming.accept).toHaveBeenCalledOnce()
+    await transport.stop()
+    expect(healthy.connection.close).toHaveBeenCalledOnce()
+    expect(endpoint.endpoint.close).toHaveBeenCalledOnce()
+    expect(received).toHaveBeenCalledOnce()
   })
 
   async function open(send: FakeSend) {

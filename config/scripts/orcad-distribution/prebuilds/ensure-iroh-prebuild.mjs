@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
-import { IROH_BUILD_IDENTITY, verifyIrohPrebuild } from './iroh-prebuild.mjs'
+import { IROH_BUILD_IDENTITY, IROH_PREBUILD_FILES, verifyIrohPrebuild } from './iroh-prebuild.mjs'
 import { readManifest } from './orcad-prebuild-slot-contents.mjs'
 import { ensurePinnedNodeExecutable } from './pinned-node-downloads.mjs'
 
@@ -13,22 +13,34 @@ const MANYLINUX_IMAGES = {
     'quay.io/pypa/manylinux_2_28_aarch64@sha256:c22ffd129ac99a8a42d1f2c2f4e88a9089288dd9ee987a7092da1c7dc48f27a9'
 }
 
-/** Reuse a verified GNU SDK, or run its existing floor producer on the matching native Linux host. */
-export async function ensureLinuxIrohPrebuild({
+/** Reuse qualified patched bytes, or run the existing producer only on the matching native host. */
+export async function ensureIrohPrebuild({
+  targetPlatform,
   arch,
+  libc = targetPlatform === 'linux' ? 'glibc' : undefined,
   root = ROOT,
   prebuildsDir = process.env.ORCAD_PREBUILDS_DIR || join(root, 'out', 'orcad-prebuilds'),
   platform = process.platform,
   hostArch = process.arch,
-  run = spawnSync
+  hostLibc = platform === 'linux'
+    ? process.report?.getReport()?.header?.glibcVersionRuntime
+      ? 'glibc'
+      : 'musl'
+    : undefined,
+  run = spawnSync,
+  ensureNode = ensurePinnedNodeExecutable
 }) {
-  if (!Object.hasOwn(MANYLINUX_IMAGES, arch)) {
-    throw new Error(`Unsupported Linux Iroh packaging architecture: ${arch}`)
+  const slot = `${targetPlatform}-${arch}${targetPlatform === 'linux' ? `-${libc}` : ''}`
+  if (slot === 'darwin-x64') {
+    return
+  }
+  if (!Object.hasOwn(IROH_PREBUILD_FILES, slot)) {
+    throw new Error(`Unsupported Iroh packaging target: ${slot}`)
   }
   root = resolve(root)
   prebuildsDir = resolve(prebuildsDir)
-  const slot = `linux-${arch}-glibc`
-  const packageName = `@number0/iroh-linux-${arch}-gnu`
+  const filename = IROH_PREBUILD_FILES[slot].split('/').at(-1)
+  const packageName = `@number0/${filename.replace(/^iroh\./, 'iroh-').replace(/\.node$/, '')}`
   const loader = JSON.parse(
     readFileSync(join(root, 'node_modules', '@number0', 'iroh', 'package.json'), 'utf8')
   )
@@ -53,21 +65,65 @@ export async function ensureLinuxIrohPrebuild({
   } catch (error) {
     cacheError = error
   }
-  const provisionCommand = 'pnpm build:orcad-prebuilds'
-  if (platform !== 'linux' || hostArch !== arch) {
+  const lane =
+    targetPlatform === 'linux' && libc === 'glibc'
+      ? `pinned manylinux 2.28 qualification lane on a native Linux ${arch} runner`
+      : `native ${targetPlatform}/${arch}${libc ? `/${libc}` : ''} qualification runner`
+  const instructions =
+    `Run pnpm build:orcad-prebuilds --slot=${slot} in the ${lane}, ` +
+    'then copy out/orcad-prebuilds here or set ORCAD_PREBUILDS_DIR to that verified directory.'
+  if (
+    platform !== targetPlatform ||
+    hostArch !== arch ||
+    (targetPlatform === 'linux' && libc === 'musl' && hostLibc !== 'musl')
+  ) {
     throw new Error(
-      `Packaging Iroh requires a verified ${slot} prebuild in ${prebuildsDir}: ${cacheError.message}. ` +
-        `Run ${provisionCommand} in the pinned manylinux 2.28 qualification lane on a native Linux ${arch} runner, ` +
-        'then copy out/orcad-prebuilds here or set ORCAD_PREBUILDS_DIR to that verified directory. Cross-host SDK compilation is not supported.',
+      `Packaging Iroh requires a verified patched ${slot} prebuild in ${prebuildsDir}: ${cacheError.message}. ` +
+        `${instructions} Cross-host, cross-architecture or foreign-libc SDK compilation is not supported.`,
       { cause: cacheError }
     )
   }
   if (prebuildsDir !== join(root, 'out', 'orcad-prebuilds')) {
     throw new Error(
-      `ORCAD_PREBUILDS_DIR has no verified ${slot} SDK: ${cacheError.message}. ` +
-        'Provide qualified prebuilds there, or unset ORCAD_PREBUILDS_DIR to build them in this workspace.',
+      `ORCAD_PREBUILDS_DIR has no verified patched ${slot} SDK: ${cacheError.message}. ` +
+        `${instructions} Or unset ORCAD_PREBUILDS_DIR to build them in this workspace.`,
       { cause: cacheError }
     )
+  }
+  if (targetPlatform !== 'linux' || libc === 'musl') {
+    const tools =
+      targetPlatform === 'linux'
+        ? 'a native musl C/C++ toolchain, bash, tar, xz, and Python 3'
+        : targetPlatform === 'darwin'
+          ? 'Xcode Command Line Tools, bash, tar, xz, and Python 3'
+          : 'Visual Studio C++ build tools (including the target architecture), Windows SDK, System32 tar.exe, and Python 3'
+    const node = await ensureNode({
+      target: slot,
+      cacheDir: join(root, 'out', 'node-runtime-cache')
+    })
+    const result = run(
+      node,
+      [
+        join(
+          root,
+          'config',
+          'scripts',
+          'orcad-distribution',
+          'prebuilds',
+          'build-orcad-prebuilds.mjs'
+        ),
+        `--slot=${slot}`
+      ],
+      { cwd: root, stdio: 'inherit' }
+    )
+    if (result.error || result.status !== 0) {
+      throw new Error(
+        `Cannot provision patched ${slot} Iroh: the native producer requires ${tools} and must finish successfully. ` +
+          `${instructions} See the build output above.`,
+        { cause: result.error ?? cacheError }
+      )
+    }
+    return verify()
   }
   const runtime = run('docker', ['info', '--format', '{{.Host.Security.Rootless}}'], {
     cwd: root,
@@ -79,7 +135,7 @@ export async function ensureLinuxIrohPrebuild({
   // Rootless Podman otherwise maps --user to a different host UID, making the workspace unwritable.
   const userNamespace =
     runtime.status === 0 && runtime.stdout.trim() === 'true' ? ['--userns=keep-id'] : []
-  const node = await ensurePinnedNodeExecutable({
+  const node = await ensureNode({
     target: slot,
     cacheDir: join(root, 'out', 'node-runtime-cache')
   })

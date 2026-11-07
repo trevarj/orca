@@ -1,4 +1,6 @@
-import type { Endpoint, RelayMode } from '@number0/iroh'
+import type { Endpoint } from '@number0/iroh'
+import { PAIRING_IROH_DIRECT_ADDRESS_MAX_COUNT } from '../../../shared/remote-runtime/pairing/mobile-pairing-protocol-limits'
+import { loadIrohNativeModule, type IrohNativeModule } from './iroh-native-loader'
 
 type IrohModuleLoadReason =
   | 'MODULE_NOT_FOUND'
@@ -23,7 +25,9 @@ export class IrohModuleLoadError extends Error {
           ? code
           : 'unknown'
     super(
-      `Iroh SDK could not be loaded (${reason}); install a compatible native module and restart`
+      `Patched Iroh SDK could not be loaded (${reason}); run pnpm build:orcad-prebuilds, ` +
+        'then provision source with node config/scripts/orcad-distribution/prebuilds/stage-source-iroh.mjs ' +
+        '(outside the pinned FHS environment), or reinstall the packaged runtime, and restart'
     )
     this.name = 'IrohModuleLoadError'
     this.reason = reason
@@ -37,17 +41,24 @@ export async function bindIrohEndpoint(
   relayUrl: string | null,
   signal: AbortSignal
 ): Promise<Endpoint | null> {
-  // Why: static imports would load the native addon even in processes that never bind.
-  let sdk: { Endpoint: typeof Endpoint; RelayMode: typeof RelayMode }
+  // Why: the loader imports only Node builtins; the addon itself stays lazy.
+  let sdk: IrohNativeModule
   try {
-    sdk = await import('@number0/iroh')
+    sdk = loadIrohNativeModule()
   } catch (cause) {
     throw new IrohModuleLoadError(cause)
   }
-  if (
-    typeof sdk.Endpoint?.bind !== 'function' ||
-    typeof sdk.RelayMode?.customFromUrls !== 'function'
-  ) {
+  let patched = false
+  try {
+    patched =
+      typeof sdk?.Endpoint?.bind === 'function' &&
+      typeof sdk?.RelayMode?.customFromUrls === 'function' &&
+      typeof sdk?.Accepting?.incomingHandshakeTimeoutMs === 'function' &&
+      sdk.Accepting.incomingHandshakeTimeoutMs() === 10_000
+  } catch {
+    // Native capability failures are permanent too; never retain their potentially private cause.
+  }
+  if (!patched) {
     throw new IrohModuleLoadError(undefined, 'api')
   }
   if (signal.aborted) {
@@ -68,7 +79,7 @@ export function readIrohEndpointDialHints(
     return {
       relayUrl: addr.relayUrl() ?? null,
       // Why: cap to keep the QR payload small; iroh ranks LAN addrs first.
-      directAddresses: addr.directAddresses().slice(0, 8)
+      directAddresses: addr.directAddresses().slice(0, PAIRING_IROH_DIRECT_ADDRESS_MAX_COUNT)
     }
   } catch {
     return null

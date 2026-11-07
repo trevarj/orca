@@ -8,7 +8,7 @@ import { hostHasIrohEndpoint, inferIrohPathMode } from './mobile-iroh-availabili
 import type { HostProfile } from './types'
 
 const host = (opts?: {
-  iroh?: { endpointId: string }
+  iroh?: HostProfile['iroh']
   relay?: HostProfile['relay']
 }): HostProfile => ({
   id: 'h1',
@@ -35,6 +35,19 @@ describe('mobile iroh availability', () => {
     expect(hostHasIrohEndpoint(host({ iroh: { endpointId: 'a'.repeat(64) } }))).toBe(true)
     expect(hostHasIrohEndpoint(host({ iroh: { endpointId: 'not-hex' } }))).toBe(false)
     expect(hostHasIrohEndpoint(host())).toBe(false)
+  })
+
+  it('keeps malformed legacy hints on the iroh path so dialing reports the error', () => {
+    const legacyHost = host({
+      iroh: {
+        endpointId: 'a'.repeat(64),
+        relayUrl: 'not a URL',
+        directAddresses: ['old-hostname:443']
+      }
+    })
+
+    expect(hostHasIrohEndpoint(legacyHost)).toBe(true)
+    expect(inferIrohPathMode(legacyHost)).toBe('primary-off-lan')
   })
 
   it('infers primary-off-lan when iroh present without relay', () => {
