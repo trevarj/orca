@@ -71,17 +71,13 @@ SDK/NDK. Run these commands from the checkout:
 
 ```bash
 nix run .#shell -- -c \
-  'pnpm install --frozen-lockfile && pnpm --dir mobile install --frozen-lockfile && pnpm run build:desktop'
+  'pnpm install --frozen-lockfile && pnpm --dir mobile install --frozen-lockfile'
 
-# Build SSH PTY and the pinned native Iroh SDK in the supported glibc 2.28 environment.
-runtime="$(nix run .#shell -- -c \
-  'node config/scripts/orcad-distribution/prebuilds/build-orcad-prebuilds.mjs --slot=linux-x64-glibc --print-runtime')"
-podman run --rm --init --userns=keep-id --user "$(id -u):$(id -g)" \
-  -e CI=true -e HOME=/tmp -e ORCA_BACKGROUND_LAUNCH=1 \
-  -e CC=gcc -e CXX=g++ -e PYTHON=/opt/python/cp312-cp312/bin/python3 \
-  -e PINNED_NODE="$runtime" -v "$PWD:$PWD" -w "$PWD" \
-  quay.io/pypa/manylinux_2_28_x86_64@sha256:407f771c51a2c3e83ebe5a7970b4289ead3a6db21d9b9c089168775cad11d328 \
-  bash -euc 'export PATH="${PINNED_NODE%/*}:$PATH"; exec "$PINNED_NODE" config/scripts/orcad-distribution/prebuilds/build-orcad-prebuilds.mjs --slot=linux-x64-glibc'
+# On the host, outside FHS: qualify and stage the patched current-host Iroh SDK.
+node config/scripts/orcad-distribution/prebuilds/stage-source-iroh.mjs
+
+# Return to FHS for development or builds.
+nix run .#shell -- -c 'pnpm run build:desktop'
 
 nix run .#shell -- -c \
   'pnpm build:orcad && node config/scripts/orcad-distribution/template/build-orcad-template.mjs --targets linux-x64-glibc'
@@ -92,6 +88,13 @@ After building, `nix run .` from the checkout launches the compiled desktop with
 It requires the installed dependencies and existing desktop build. `nix build .` builds only
 the tool environment, not Orca; `pnpm run build:desktop` compiles the application. For a
 noninteractive command inside the FHS environment, use `nix run .#shell -- -c 'command'`.
+
+For development, run `pnpm dev` inside `nix develop` after the same dependency-install
+and host SDK-staging steps. Stock SDK bytes lack the enforced ten-second incoming
+handshake deadline and are rejected before binding. Staging verifies the current-host
+prebuild and copies its hash-named native addon into checkout-owned
+`out/node_modules/@number0/iroh`; it never modifies the installed pnpm packages or store.
+Repeat staging after changing the SDK source/patch or replacing the prebuilds.
 
 The desktop build alone does not include the server deployment template needed to set up
 SSH hosts or update their managed servers. The server-build commands above create
@@ -106,13 +109,14 @@ Official release packaging requires every target. The fork-only Linux CI lane be
 explicitly packages this partial template; it does not expand SSH-host support.
 If Orca was already running when you added or rebuilt the template, restart it before
 reconnecting: managed-server update discovery caches a missing template for the session.
-Use the existing rootless Podman setup for this local native build. A Docker daemon
-can run the same command with `docker run` and without `--userns=keep-id`; do not
-add socket mounts or privileged mode. The builder verifies the exact official SDK
-source and Rust compiler archives, installs the compiler only in its scratch
-directory, and uses the committed Cargo lockfile. Building with the main shell's
-newer glibc headers is not compatible; do not bypass the ABI verifier. Use
-`nix develop` for an interactive desktop/Android FHS shell.
+Run SDK staging on the host with the existing working rootless Docker setup (or
+rootless Podman through a Docker shim), not inside FHS. The command reuses qualified
+prebuilds or invokes the pinned manylinux 2.28 producer; do not add socket mounts or
+privileged mode. The builder verifies the exact official SDK source and Rust compiler
+archives, installs the compiler only in its scratch directory, and uses the committed
+Cargo lockfile. Building with the main shell's newer glibc headers is not compatible;
+do not bypass the ABI verifier. Use `nix develop` for an interactive desktop/Android
+FHS shell.
 
 Native Wayland copying additionally needs the clipboard helper. For local development,
 compile it inside `nix develop` before launching:
