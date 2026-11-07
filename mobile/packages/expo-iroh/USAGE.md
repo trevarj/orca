@@ -120,8 +120,9 @@ writes do not renew it. Unauthenticated traffic never extends the fixed
 pre-authentication deadline.
 
 Only authenticated direct WebSocket clients contribute TCP source-address history.
-Iroh paths and home-relay addresses do not; remembered public sources do not
-change listener exposure or credential permissions.
+Iroh paths and home-relay addresses do not. At startup, `orca serve` can use
+remembered direct public sources to allow public WebSocket clients unless
+`--refuse-public` is set. Iroh admission and credential permissions remain separate.
 
 Endpoint identity read failures leave the existing secret untouched; diagnostics
 distinguish read, write, and SDK-load failures without including secret contents.

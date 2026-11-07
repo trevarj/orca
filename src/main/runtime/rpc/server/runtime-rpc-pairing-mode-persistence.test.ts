@@ -550,6 +550,8 @@ describe('OrcaRuntimeRpcServer', () => {
 
       const iroh = registry.addDevice('Iroh phone', 'mobile')
       expect(registry.setMobilePairingConnectionMode(iroh.deviceId, 'iroh')).toBe(true)
+      registry.updateLastSeen(iroh.deviceId, undefined, 'legacy')
+      expect(registry.getDevice(iroh.deviceId)?.legacyE2EEAuthAt).toBeGreaterThan(0)
       const relay = registry.addDevice('Relay phone', 'mobile')
       const direct = registry.addDevice('Direct phone', 'mobile')
       // Public policy is sticky, so direct success must follow the negative recorder cases.
@@ -575,6 +577,7 @@ describe('OrcaRuntimeRpcServer', () => {
         expect(JSON.parse(acknowledgement!)).toMatchObject({ type: 'e2ee_authenticated', v: 2 })
         const row = registry.getDevice(device.deviceId)
         expect(row?.lastSeenAt).toBeGreaterThan(0)
+        expect(row?.legacyE2EEAuthAt).toBeUndefined()
         if (metadata.transport === 'direct') {
           expect(row?.lastSourceClass).toBe('public')
           expect(note).toHaveBeenCalledExactlyOnceWith('public')

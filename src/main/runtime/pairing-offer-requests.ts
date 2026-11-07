@@ -57,6 +57,7 @@ async function pairingAddress(
   return address ?? (await getDefaultPairingAddress(server.getNetworkExposureBindHost(), lookup))
 }
 
+/** Shares desktop/CLI mobile offers while keeping Iroh key-dial independent of LAN discovery. */
 export async function requestMobilePairingOffer(
   server: PairingOfferServer,
   args: {
