@@ -165,6 +165,7 @@ export function MobilePane(): React.JSX.Element {
   /**
    * Mints an offer for the selected or overridden mode, ignoring superseded responses.
    * Queued rotation is mandatory until a current request succeeds; Iroh offers omit the selected LAN address.
+   * Only automatic-mode Relay failures enter account recovery; other unavailable offers retain Generate.
    */
   const generateQR = useCallback(
     async (
@@ -218,7 +219,11 @@ export function MobilePane(): React.JSX.Element {
           setPairingUrl(null)
           setQrError(false)
           setEndpoint(null)
-          if (result.reason === 'relay_mint_failed' && result.relayFailure) {
+          if (
+            preferredMode === 'automatic' &&
+            result.reason === 'relay_mint_failed' &&
+            result.relayFailure
+          ) {
             setRelayMintFailure(result.relayFailure)
             // Reread likely revoked auth so guidance can offer sign-in rather than futile retries.
             void useAppStore.getState().fetchOrcaProfileAuthStatus()

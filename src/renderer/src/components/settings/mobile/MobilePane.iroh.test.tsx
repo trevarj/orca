@@ -62,19 +62,22 @@ vi.mock('./pairing/MobilePairingSetupSection', () => ({
     loading: boolean
     connectionPathControl: React.ReactNode
     selectedAddress: string | undefined
+    showGenerateAction?: boolean
     onGenerateQr: () => void
   }) => (
     <div>
       <span data-testid="can-generate">{String(props.canGenerate)}</span>
       <span data-testid="selected-address">{props.selectedAddress ?? 'none'}</span>
       {props.connectionPathControl}
-      <button
-        type="button"
-        onClick={props.onGenerateQr}
-        disabled={props.loading || props.canGenerate === false}
-      >
-        Generate
-      </button>
+      {props.showGenerateAction !== false ? (
+        <button
+          type="button"
+          onClick={props.onGenerateQr}
+          disabled={props.loading || props.canGenerate === false}
+        >
+          Generate
+        </button>
+      ) : null}
     </div>
   )
 }))
@@ -184,6 +187,45 @@ describe('MobilePane Iroh pairing', () => {
     await waitFor(() => expect(getPairingQR).toHaveBeenCalledWith({ connectionMode: 'iroh' }))
     expect(screen.getByTestId('qr')).toHaveTextContent('base64,iroh')
     expect(screen.getByTestId('firewall-notice')).toHaveAttribute('data-pairing-ready', 'false')
+  })
+
+  it('keeps Generate available when another pairing surface supersedes the current Iroh request', async () => {
+    mocks.holder.state.settings.mobilePairingConnectionMode = 'iroh'
+    const pending = Promise.withResolvers<Record<string, unknown>>()
+    getPairingQR
+      .mockResolvedValue({
+        available: true,
+        qrDataUrl: 'data:image/png;base64,iroh',
+        pairingUrl: 'orca://pair#iroh',
+        endpoint: 'iroh://endpoint-id',
+        connectionMode: 'iroh'
+      })
+      .mockReturnValueOnce(pending.promise)
+    const user = userEvent.setup()
+    render(<MobilePane />)
+    await user.click(screen.getByRole('button', { name: 'Generate' }))
+    expect(screen.getByRole('button', { name: 'Generate' })).toBeDisabled()
+
+    // Cross-surface supersession leaves this pane's local request ID current.
+    await act(async () =>
+      pending.resolve({
+        available: false,
+        reason: 'relay_mint_failed',
+        guidance: 'The Relay pairing request was replaced by a newer connection choice.',
+        relayFailure: {
+          code: 'relay_request_superseded',
+          stage: 'binding_failed',
+          message: 'Relay pairing request superseded'
+        }
+      })
+    )
+    expect(screen.getByTestId('pairing-url')).toHaveTextContent(/^none$/)
+    expect(screen.getByRole('button', { name: 'Generate' })).toBeEnabled()
+    await user.click(screen.getByRole('button', { name: 'Generate' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('pairing-url')).toHaveTextContent('orca://pair#iroh')
+    )
+    expect(screen.getByTestId('qr')).toHaveTextContent('base64,iroh')
   })
 
   it.each(['displayed', 'pending'])(

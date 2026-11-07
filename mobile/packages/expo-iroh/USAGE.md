@@ -119,6 +119,10 @@ After authentication, the desktop idle lease tracks nonempty native reads
 writes do not renew it. Unauthenticated traffic never extends the fixed
 pre-authentication deadline.
 
+Only authenticated direct WebSocket clients contribute TCP source-address history.
+Iroh paths and home-relay addresses do not; remembered public sources do not
+change listener exposure or credential permissions.
+
 Endpoint identity read failures leave the existing secret untouched; diagnostics
 distinguish read, write, and SDK-load failures without including secret contents.
 Desktop pairing codes expire after ten minutes. Visible QR codes renew without
